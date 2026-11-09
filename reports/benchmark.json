@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-11-09T02:09:38.199169+00:00",
+  "environment": {
+    "python": "3.14.10",
+    "platform": "Linux-7.2.14-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "hostname": "selene"
+  },
+  "configuration": {
+    "block_size_bytes": 4194304,
+    "replication_factor": 3,
+    "write_quorum": 2,
+    "virtual_nodes": 150
+  },
+  "metadata": {
+    "stat": {
+      "runs": 50,
+      "avg_ms": 3.237,
+      "p50_ms": 3.112,
+      "p95_ms": 4.87,
+      "min_ms": 1.776,
+      "max_ms": 5.468
+    },
+    "resolve_path": {
+      "runs": 50,
+      "avg_ms": 4.219,
+      "p50_ms": 4.088,
+      "p95_ms": 5.488,
+      "min_ms": 2.733,
+      "max_ms": 8.058
+    },
+    "list_dir": {
+      "runs": 50,
+      "avg_ms": 4.547,
+      "p50_ms": 4.165,
+      "p95_ms": 6.333,
+      "min_ms": 2.167,
+      "max_ms": 10.078
+    }
+  },
+  "files": [
+    {
+      "size_bytes": 1048576,
+      "size_mib": 1.0,
+      "blocks": [
+        1,
+        1,
+        1
+      ],
+      "upload": {
+        "runs": 3,
+        "avg_ms": 47.449,
+        "p50_ms": 49.43,
+        "p95_ms": 49.43,
+        "min_ms": 42.329,
+        "max_ms": 50.588,
+        "avg_mib_s": 21.075
+      },
+      "download": {
+        "runs": 3,
+        "avg_ms": 23.501,
+        "p50_ms": 22.688,
+        "p95_ms": 22.688,
+        "min_ms": 22.059,
+        "max_ms": 25.757,
+        "avg_mib_s": 42.551
+      }
+    },
+    {
+      "size_bytes": 4194304,
+      "size_mib": 4.0,
+      "blocks": [
+        1,
+        1,
+        1
+      ],
+      "upload": {
+        "runs": 3,
+        "avg_ms": 95.094,
+        "p50_ms": 98.872,
+        "p95_ms": 98.872,
+        "min_ms": 86.768,
+        "max_ms": 99.642,
+        "avg_mib_s": 42.064
+      },
+      "download": {
+        "runs": 3,
+        "avg_ms": 46.332,
+        "p50_ms": 49.379,
+        "p95_ms": 49.379,
+        "min_ms": 39.989,
+        "max_ms": 49.627,
+        "avg_mib_s": 86.334
+      }
+    },
+    {
+      "size_bytes": 8388608,
+      "size_mib": 8.0,
+      "blocks": [
+        2,
+        2,
+        2
+      ],
+      "upload": {
+        "runs": 3,
+        "avg_ms": 186.301,
+        "p50_ms": 189.789,
+        "p95_ms": 189.789,
+        "min_ms": 167.161,
+        "max_ms": 201.954,
+        "avg_mib_s": 42.941
+      },
+      "download": {
+        "runs": 3,
+        "avg_ms": 71.333,
+        "p50_ms": 64.704,
+        "p95_ms": 64.704,
+        "min_ms": 64.047,
+        "max_ms": 85.25,
+        "avg_mib_s": 112.149
+      }
+    },
+    {
+      "size_bytes": 16777216,
+      "size_mib": 16.0,
+      "blocks": [
+        4,
+        4,
+        4
+      ],
+      "upload": {
+        "runs": 3,
+        "avg_ms": 320.75,
+        "p50_ms": 328.452,
+        "p95_ms": 328.452,
+        "min_ms": 269.465,
+        "max_ms": 364.332,
+        "avg_mib_s": 49.883
+      },
+      "download": {
+        "runs": 3,
+        "avg_ms": 131.564,
+        "p50_ms": 131.882,
+        "p95_ms": 131.882,
+        "min_ms": 113.38,
+        "max_ms": 149.429,
+        "avg_mib_s": 121.614
+      }
+    }
+  ]
+}
