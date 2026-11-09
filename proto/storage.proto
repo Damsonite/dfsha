@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package dfsha.storage;
+
+service StorageNode {
+  rpc WriteBlock(WriteBlockRequest) returns (WriteBlockResponse);
+
+  rpc ReadBlock(ReadBlockRequest) returns (ReadBlockResponse);
+
+  rpc DeleteBlock(DeleteBlockRequest) returns (DeleteBlockResponse);
+
+  rpc BlockStatus(BlockStatusRequest) returns (BlockStatusResponse);
+
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message WriteBlockRequest {
+  string block_id = 1;
+  bytes data = 2;
+  string checksum = 3;
+  uint64 version = 4;
+}
+
+message WriteBlockResponse {
+  bool success = 1;
+  string block_id = 2;
+  string checksum = 3;
+  uint64 version = 4;
+  string message = 5;
+}
+
+message ReadBlockRequest {
+  string block_id = 1;
+}
+
+message ReadBlockResponse {
+  bool success = 1;
+  string block_id = 2;
+  bytes data = 3;
+  string checksum = 4;
+  uint64 version = 5;
+  string message = 6;
+}
+
+message DeleteBlockRequest {
+  string block_id = 1;
+}
+
+message DeleteBlockResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message BlockStatusRequest {
+  string block_id = 1;
+}
+
+message BlockStatusResponse {
+  bool exists = 1;
+  string block_id = 2;
+  string checksum = 3;
+  uint64 version = 4;
+  bool valid = 5;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string node_id = 1;
+  string status = 2;
+}

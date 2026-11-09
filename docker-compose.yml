@@ -28,47 +28,53 @@ services:
       - dfsha_network
 
   storage-1:
-    image: python:3.14-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dfsha-storage-1
     restart: unless-stopped
-    command: ["python", "-c", "import time; time.sleep(float('inf'))"]
-
+    environment:
+      NODE_ID: storage-1
+      GRPC_PORT: 50061
+      STORAGE_PATH: /data
+    ports:
+      - "50061:50061"
     volumes:
       - storage_1_data:/data
-
-    expose:
-      - "50061"
-
     networks:
       - dfsha_network
 
   storage-2:
-    image: python:3.14-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dfsha-storage-2
     restart: unless-stopped
-    command: ["python", "-c", "import time; time.sleep(float('inf'))"]
-
+    environment:
+      NODE_ID: storage-2
+      GRPC_PORT: 50061
+      STORAGE_PATH: /data
+    ports:
+      - "50062:50061"
     volumes:
       - storage_2_data:/data
-
-    expose:
-      - "50062"
-
     networks:
       - dfsha_network
 
   storage-3:
-    image: python:3.14-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dfsha-storage-3
     restart: unless-stopped
-    command: ["python", "-c", "import time; time.sleep(float('inf'))"]
-
+    environment:
+      NODE_ID: storage-3
+      GRPC_PORT: 50061
+      STORAGE_PATH: /data
+    ports:
+      - "50063:50061"
     volumes:
       - storage_3_data:/data
-
-    expose:
-      - "50063"
-
     networks:
       - dfsha_network
 
