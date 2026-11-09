@@ -42,6 +42,37 @@ class DFSClient:
             self.metadata_channel
         )
 
+    def mkdir(self, name, owner_id, parent_id=""):
+
+        return self.metadata_stub.Mkdir(
+            metadata_pb2.MkdirRequest(
+                owner_id=owner_id,
+                parent_id=parent_id,
+                name=name,
+            ),
+            timeout=30,
+        )
+
+    def list_dir(self, owner_id, parent_id=""):
+
+        return self.metadata_stub.ListDir(
+            metadata_pb2.ListDirRequest(
+                owner_id=owner_id,
+                parent_id=parent_id,
+            ),
+            timeout=30,
+        )
+
+    def stat(self, entry_id, owner_id):
+
+        return self.metadata_stub.Stat(
+            metadata_pb2.StatRequest(
+                owner_id=owner_id,
+                entry_id=entry_id,
+            ),
+            timeout=30,
+        )
+
     def upload(self, path, owner_id, parent_id=""):
 
         path = Path(path)
@@ -147,6 +178,16 @@ class DFSClient:
         except Exception:
             temp_path.unlink(missing_ok=True)
             raise
+
+    def remove(self, entry_id, owner_id):
+
+        return self.stub.RemoveEntry(
+            data_pb2.RemoveEntryRequest(
+                owner_id=owner_id,
+                entry_id=entry_id,
+            ),
+            timeout=60,
+        )
 
     def close(self):
 

@@ -69,6 +69,11 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             for node_id, endpoint in self.nodes.items()
         }
 
+        self.storage_stubs_by_endpoint = {
+            endpoint: self.storage_stubs[node_id]
+            for node_id, endpoint in self.nodes.items()
+        }
+
         self.ring = ConsistentHash(list(self.nodes.keys()), virtual_nodes=150)
 
         self.max_upload_bytes = self._read_max_upload_bytes()
@@ -535,6 +540,81 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             return response.data, failures
 
         return None, failures
+
+    def RemoveEntry(self, request, context):
+
+        try:
+            entry = self.metadata.Stat(
+                metadata_pb2.StatRequest(
+                    owner_id=request.owner_id, entry_id=request.entry_id
+                ),
+                timeout=15,
+            )
+
+            if entry.type == "FILE":
+                locations = self.metadata.LocateBlocks(
+                    metadata_pb2.LocateBlocksRequest(
+                        owner_id=request.owner_id, file_id=request.entry_id
+                    ),
+                    timeout=15,
+                )
+
+                failures = []
+
+                for block in locations.blocks:
+                    if not block.node_endpoints:
+                        failures.append(
+                            f"{block.block_id}: no ready replicas"
+                        )
+                        continue
+
+                    for endpoint in block.node_endpoints:
+                        stub = self.storage_stubs_by_endpoint.get(endpoint)
+
+                        if stub is None:
+                            failures.append(
+                                f"{endpoint}: unknown storage endpoint"
+                            )
+                            continue
+
+                        try:
+                            response = stub.DeleteBlock(
+                                storage_pb2.DeleteBlockRequest(
+                                    block_id=block.block_id
+                                ),
+                                timeout=15,
+                            )
+
+                            if not response.success:
+                                failures.append(
+                                    f"{endpoint}: {response.message}"
+                                )
+                        except grpc.RpcError as error:
+                            failures.append(
+                                f"{endpoint}: {error.code().name}: "
+                                f"{error.details()}"
+                            )
+
+                if failures:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "Could not delete all block replicas: "
+                        + "; ".join(failures),
+                    )
+
+            self.metadata.Remove(
+                metadata_pb2.RemoveRequest(
+                    owner_id=request.owner_id, entry_id=request.entry_id
+                ),
+                timeout=15,
+            )
+
+            return data_pb2.RemoveEntryResponse(
+                success=True, message="Entry removed"
+            )
+
+        except grpc.RpcError as error:
+            context.abort(error.code(), error.details())
 
     def Health(self, request, context):
 

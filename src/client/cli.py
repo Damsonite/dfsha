@@ -24,6 +24,27 @@ def main():
     get_parser.add_argument("destination")
     get_parser.add_argument("--user", default="user-001")
 
+    mkdir_parser = subparsers.add_parser("mkdir")
+
+    mkdir_parser.add_argument("name")
+    mkdir_parser.add_argument("--parent", default="")
+    mkdir_parser.add_argument("--user", default="user-001")
+
+    ls_parser = subparsers.add_parser("ls")
+
+    ls_parser.add_argument("--parent", default="")
+    ls_parser.add_argument("--user", default="user-001")
+
+    stat_parser = subparsers.add_parser("stat")
+
+    stat_parser.add_argument("entry_id")
+    stat_parser.add_argument("--user", default="user-001")
+
+    rm_parser = subparsers.add_parser("rm")
+
+    rm_parser.add_argument("entry_id")
+    rm_parser.add_argument("--user", default="user-001")
+
     args = parser.parse_args()
 
     client = DFSClient()
@@ -45,6 +66,41 @@ def main():
             print("\nArchivo descargado correctamente")
             print(f"Ruta: {result['path']}")
             print(f"SHA-256: {result['checksum']}")
+
+        elif args.command == "mkdir":
+            entry = client.mkdir(args.name, args.user, args.parent)
+
+            print("\nDirectorio creado correctamente")
+            print(f"ID: {entry.entry_id}")
+            print(f"Nombre: {entry.name}")
+            print(f"Tipo: {entry.type}")
+
+        elif args.command == "ls":
+            listing = client.list_dir(args.user, args.parent)
+
+            print(f"\nEntradas: {len(listing.entries)}")
+
+            for entry in listing.entries:
+                print(
+                    f"{entry.type:<9} {entry.size:>10}  "
+                    f"{entry.name}  {entry.entry_id}"
+                )
+
+        elif args.command == "stat":
+            entry = client.stat(args.entry_id, args.user)
+
+            print("\nInformación de la entrada")
+            print(f"ID: {entry.entry_id}")
+            print(f"Nombre: {entry.name}")
+            print(f"Tipo: {entry.type}")
+            print(f"Tamaño: {entry.size} bytes")
+            print(f"Checksum: {entry.checksum}")
+            print(f"Versión: {entry.version}")
+
+        elif args.command == "rm":
+            result = client.remove(args.entry_id, args.user)
+
+            print(f"\nEntrada eliminada: {result.message}")
 
     except grpc.RpcError as error:
         print(

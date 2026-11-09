@@ -7,6 +7,8 @@ service DataService {
 
   rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileResponse);
 
+  rpc RemoveEntry(RemoveEntryRequest) returns (RemoveEntryResponse);
+
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -45,6 +47,16 @@ message DownloadFileRequest {
 message DownloadFileResponse {
   int32 block_index = 1;
   bytes data = 2;
+}
+
+message RemoveEntryRequest {
+  string owner_id = 1;
+  string entry_id = 2;
+}
+
+message RemoveEntryResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message HealthRequest {}

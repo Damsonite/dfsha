@@ -165,6 +165,16 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
                         grpc.StatusCode.FAILED_PRECONDITION, "Directory is not empty"
                     )
 
+            if entry.type == "FILE":
+                session.execute(
+                    delete(BlockReplica).where(
+                        BlockReplica.block_id.in_(
+                            select(Block.id).where(Block.file_id == entry.id)
+                        )
+                    )
+                )
+                session.execute(delete(Block).where(Block.file_id == entry.id))
+
             session.delete(entry)
             session.commit()
 
