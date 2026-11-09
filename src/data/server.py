@@ -16,6 +16,12 @@ from src.common import (
     storage_pb2,
     storage_pb2_grpc,
 )
+from src.common.auth import (
+    DEFAULT_SERVICE_TOKEN,
+    DEFAULT_STORAGE_TOKEN,
+    ClientTokenInterceptor,
+    extract_bearer_token,
+)
 from src.common.consistent_hash import ConsistentHash
 
 BLOCK_SIZE = 4 * 1024 * 1024
@@ -67,12 +73,27 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             "storage-3": "storage-3:50061",
         }
 
-        self.storage_stubs = {
-            node_id: storage_pb2_grpc.StorageNodeStub(
-                grpc.insecure_channel(endpoint, options=GRPC_CHANNEL_OPTIONS)
+        self.service_token = os.getenv(
+            "DFSHA_SERVICE_TOKEN", DEFAULT_SERVICE_TOKEN
+        )
+
+        self.storage_token = os.getenv(
+            "DFSHA_STORAGE_TOKEN", DEFAULT_STORAGE_TOKEN
+        )
+
+        self.storage_stubs = {}
+
+        for node_id, endpoint in self.nodes.items():
+            channel = grpc.intercept_channel(
+                grpc.insecure_channel(
+                    endpoint, options=GRPC_CHANNEL_OPTIONS
+                ),
+                ClientTokenInterceptor(self.storage_token),
             )
-            for node_id, endpoint in self.nodes.items()
-        }
+
+            self.storage_stubs[node_id] = storage_pb2_grpc.StorageNodeStub(
+                channel
+            )
 
         self.storage_stubs_by_endpoint = {
             endpoint: self.storage_stubs[node_id]
@@ -120,6 +141,48 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         return value
 
+    def _authenticate(self, context):
+        token = extract_bearer_token(context.invocation_metadata())
+
+        if not token:
+            context.abort(
+                grpc.StatusCode.UNAUTHENTICATED, "Missing bearer token"
+            )
+
+        try:
+            response = self.metadata.Authenticate(
+                metadata_pb2.AuthenticateRequest(token=token),
+                timeout=5,
+            )
+        except grpc.RpcError as error:
+            context.abort(error.code(), error.details())
+
+        if not response.success:
+            context.abort(
+                grpc.StatusCode.UNAUTHENTICATED,
+                response.message or "Invalid bearer token",
+            )
+
+        return token, response.user_id, response.is_service
+
+    @staticmethod
+    def _authorization_metadata(token):
+        return (("authorization", f"Bearer {token}"),)
+
+    def _metadata_call(self, method, request, token, timeout=15):
+        return method(
+            request,
+            timeout=timeout,
+            metadata=self._authorization_metadata(token),
+        )
+
+    @staticmethod
+    def _authorize_owner(context, owner_id, user_id, is_service):
+        if not is_service and owner_id != user_id:
+            context.abort(
+                grpc.StatusCode.PERMISSION_DENIED, "Owner mismatch"
+            )
+
     def start_maintenance(self):
         if self.maintenance_thread and self.maintenance_thread.is_alive():
             return
@@ -139,7 +202,9 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
             if time.monotonic() >= next_repair:
                 try:
-                    result = self._repair(REPLICATION_FACTOR)
+                    result = self._repair(
+                        REPLICATION_FACTOR, self.service_token
+                    )
 
                     if result.failures:
                         logger.warning(
@@ -176,11 +241,13 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 continue
 
             try:
-                self.metadata.SetNodeStatus(
+                self._metadata_call(
+                    self.metadata.SetNodeStatus,
                     metadata_pb2.SetNodeStatusRequest(
                         node_id=node_id,
                         status=status,
                     ),
+                    self.service_token,
                     timeout=5,
                 )
                 self.node_status[node_id] = status
@@ -192,6 +259,8 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 )
 
     def UploadFile(self, request_iterator, context):
+
+        token, user_id, is_service = self._authenticate(context)
 
         header = None
         buffer = bytearray()
@@ -218,8 +287,14 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
                     header = request.header
 
+                    if not is_service and header.owner_id != user_id:
+                        raise UploadRejected(
+                            grpc.StatusCode.PERMISSION_DENIED,
+                            "Owner mismatch",
+                        )
+
                     self._validate_upload_header(header)
-                    lease_id = self._acquire_lease(header)
+                    lease_id = self._acquire_lease(header, token)
                     lease_renew_at = time.monotonic() + max(
                         1.0, self.upload_lease_ttl_seconds / 2
                     )
@@ -265,7 +340,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     block_index += 1
 
                     if time.monotonic() >= lease_renew_at:
-                        self._renew_lease(lease_id, header.owner_id)
+                        self._renew_lease(lease_id, header.owner_id, token)
                         lease_renew_at = time.monotonic() + max(
                             1.0, self.upload_lease_ttl_seconds / 2
                         )
@@ -284,10 +359,11 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
             checksum = file_hash.hexdigest()
 
-            self._renew_lease(lease_id, header.owner_id)
+            self._renew_lease(lease_id, header.owner_id, token)
 
             try:
-                commit = self.metadata.CommitFile(
+                commit = self._metadata_call(
+                    self.metadata.CommitFile,
                     metadata_pb2.CommitFileRequest(
                         owner_id=header.owner_id,
                         parent_id=header.parent_id,
@@ -297,6 +373,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                         blocks=blocks,
                         lease_id=lease_id,
                     ),
+                    token,
                     timeout=30,
                 )
             except grpc.RpcError as error:
@@ -342,7 +419,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 )
 
             if lease_id:
-                self._release_lease(lease_id, header.owner_id)
+                self._release_lease(lease_id, header.owner_id, token)
 
             context.abort(error.code, error.details)
 
@@ -350,7 +427,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             self._cleanup_blocks(written_blocks)
 
             if lease_id:
-                self._release_lease(lease_id, header.owner_id)
+                self._release_lease(lease_id, header.owner_id, token)
 
             context.abort(error.code(), error.details())
 
@@ -358,7 +435,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             self._cleanup_blocks(written_blocks)
 
             if lease_id:
-                self._release_lease(lease_id, header.owner_id)
+                self._release_lease(lease_id, header.owner_id, token)
 
             context.abort(grpc.StatusCode.INTERNAL, f"Upload failed: {error}")
 
@@ -383,16 +460,18 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename"
             )
 
-    def _acquire_lease(self, header):
+    def _acquire_lease(self, header, token):
 
         try:
-            response = self.metadata.AcquireUploadLease(
+            response = self._metadata_call(
+                self.metadata.AcquireUploadLease,
                 metadata_pb2.AcquireUploadLeaseRequest(
                     owner_id=header.owner_id,
                     parent_id=header.parent_id,
                     name=header.filename,
                     ttl_seconds=self.upload_lease_ttl_seconds,
                 ),
+                token,
                 timeout=15,
             )
         except grpc.RpcError as error:
@@ -406,15 +485,17 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         return response.lease_id
 
-    def _renew_lease(self, lease_id, owner_id):
+    def _renew_lease(self, lease_id, owner_id, token):
 
         try:
-            response = self.metadata.RenewUploadLease(
+            response = self._metadata_call(
+                self.metadata.RenewUploadLease,
                 metadata_pb2.RenewUploadLeaseRequest(
                     owner_id=owner_id,
                     lease_id=lease_id,
                     ttl_seconds=self.upload_lease_ttl_seconds,
                 ),
+                token,
                 timeout=15,
             )
         except grpc.RpcError as error:
@@ -426,14 +507,16 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 response.message or "Upload lease renewal failed",
             )
 
-    def _release_lease(self, lease_id, owner_id):
+    def _release_lease(self, lease_id, owner_id, token):
 
         try:
-            self.metadata.ReleaseUploadLease(
+            self._metadata_call(
+                self.metadata.ReleaseUploadLease,
                 metadata_pb2.ReleaseUploadLeaseRequest(
                     owner_id=owner_id,
                     lease_id=lease_id,
                 ),
+                token,
                 timeout=5,
             )
         except Exception as error:
@@ -514,11 +597,19 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
     def DownloadFile(self, request, context):
 
+        token, user_id, is_service = self._authenticate(context)
+
+        self._authorize_owner(
+            context, request.owner_id, user_id, is_service
+        )
+
         try:
-            metadata = self.metadata.Stat(
+            metadata = self._metadata_call(
+                self.metadata.Stat,
                 metadata_pb2.StatRequest(
                     owner_id=request.owner_id, entry_id=request.file_id
                 ),
+                token,
                 timeout=15,
             )
 
@@ -538,10 +629,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     "File checksum is missing or invalid",
                 )
 
-            locations = self.metadata.LocateBlocks(
+            locations = self._metadata_call(
+                self.metadata.LocateBlocks,
                 metadata_pb2.LocateBlocksRequest(
                     owner_id=request.owner_id, file_id=request.file_id
                 ),
+                token,
                 timeout=15,
             )
 
@@ -651,13 +744,13 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         failures = []
 
         for endpoint in block.node_endpoints:
-            channel = grpc.insecure_channel(
-                endpoint, options=GRPC_CHANNEL_OPTIONS
-            )
+            stub = self.storage_stubs_by_endpoint.get(endpoint)
+
+            if stub is None:
+                failures.append(f"{endpoint}: unknown storage endpoint")
+                continue
 
             try:
-                stub = storage_pb2_grpc.StorageNodeStub(channel)
-
                 response = stub.ReadBlock(
                     storage_pb2.ReadBlockRequest(block_id=block.block_id),
                     timeout=15,
@@ -667,8 +760,6 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     f"{endpoint}: {error.code().name}: {error.details()}"
                 )
                 continue
-            finally:
-                channel.close()
 
             if not response.success:
                 failures.append(f"{endpoint}: rejected: {response.message}")
@@ -702,21 +793,31 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
     def RemoveEntry(self, request, context):
 
+        token, user_id, is_service = self._authenticate(context)
+
+        self._authorize_owner(
+            context, request.owner_id, user_id, is_service
+        )
+
         try:
-            entry = self.metadata.Stat(
+            entry = self._metadata_call(
+                self.metadata.Stat,
                 metadata_pb2.StatRequest(
                     owner_id=request.owner_id, entry_id=request.entry_id
                 ),
+                token,
                 timeout=15,
             )
 
             if entry.type == "FILE":
-                locations = self.metadata.LocateBlocks(
+                locations = self._metadata_call(
+                    self.metadata.LocateBlocks,
                     metadata_pb2.LocateBlocksRequest(
                         owner_id=request.owner_id,
                         file_id=request.entry_id,
                         include_inactive=True,
                     ),
+                    token,
                     timeout=15,
                 )
 
@@ -763,10 +864,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                         + "; ".join(failures),
                     )
 
-            self.metadata.Remove(
+            self._metadata_call(
+                self.metadata.Remove,
                 metadata_pb2.RemoveRequest(
                     owner_id=request.owner_id, entry_id=request.entry_id
                 ),
+                token,
                 timeout=15,
             )
 
@@ -779,6 +882,14 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
     def Repair(self, request, context):
 
+        token, _, is_service = self._authenticate(context)
+
+        if not is_service:
+            context.abort(
+                grpc.StatusCode.PERMISSION_DENIED,
+                "Repair requires a service token",
+            )
+
         target_replicas = request.target_replicas or REPLICATION_FACTOR
 
         if target_replicas < 1 or target_replicas > REPLICATION_FACTOR:
@@ -788,16 +899,18 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             )
 
         try:
-            return self._repair(target_replicas)
+            return self._repair(target_replicas, token)
         except grpc.RpcError as error:
             context.abort(error.code(), error.details())
 
-    def _repair(self, target_replicas):
+    def _repair(self, target_replicas, token):
 
-        repair_blocks = self.metadata.ListBlocksForRepair(
+        repair_blocks = self._metadata_call(
+            self.metadata.ListBlocksForRepair,
             metadata_pb2.ListBlocksForRepairRequest(
                 target_replicas=target_replicas
             ),
+            token,
             timeout=30,
         ).blocks
 
@@ -858,6 +971,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     node_id,
                     block,
                     source_data,
+                    token,
                     register_if_valid=register_if_valid,
                 )
 
@@ -966,7 +1080,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         return (not valid), None
 
     def _repair_replica(
-        self, node_id, block, source_data, register_if_valid=False
+        self,
+        node_id,
+        block,
+        source_data,
+        token,
+        register_if_valid=False,
     ):
 
         stub = self.storage_stubs.get(node_id)
@@ -997,12 +1116,14 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         if valid and register_if_valid:
             try:
-                self.metadata.RegisterBlockReplica(
+                self._metadata_call(
+                    self.metadata.RegisterBlockReplica,
                     metadata_pb2.RegisterBlockReplicaRequest(
                         block_id=block.block_id,
                         node_id=node_id,
                         version=block.version,
                     ),
+                    token,
                     timeout=10,
                 )
             except grpc.RpcError as error:
@@ -1050,12 +1171,14 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             return False, f"{node_id}: write rejected: {response.message}"
 
         try:
-            self.metadata.RegisterBlockReplica(
+            self._metadata_call(
+                self.metadata.RegisterBlockReplica,
                 metadata_pb2.RegisterBlockReplicaRequest(
                     block_id=block.block_id,
                     node_id=node_id,
                     version=block.version,
                 ),
+                token,
                 timeout=10,
             )
         except grpc.RpcError as error:

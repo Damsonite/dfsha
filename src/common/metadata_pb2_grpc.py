@@ -124,6 +124,11 @@ class MetadataServiceStub:
                 request_serializer=metadata__pb2.RegisterBlockReplicaRequest.SerializeToString,
                 response_deserializer=metadata__pb2.OperationResponse.FromString,
                 _registered_method=True)
+        self.Authenticate = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/Authenticate',
+                request_serializer=metadata__pb2.AuthenticateRequest.SerializeToString,
+                response_deserializer=metadata__pb2.AuthenticateResponse.FromString,
+                _registered_method=True)
 
 
 class MetadataServiceServicer:
@@ -237,6 +242,12 @@ class MetadataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Authenticate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MetadataServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -329,6 +340,11 @@ def add_MetadataServiceServicer_to_server(servicer, server):
                     servicer.RegisterBlockReplica,
                     request_deserializer=metadata__pb2.RegisterBlockReplicaRequest.FromString,
                     response_serializer=metadata__pb2.OperationResponse.SerializeToString,
+            ),
+            'Authenticate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Authenticate,
+                    request_deserializer=metadata__pb2.AuthenticateRequest.FromString,
+                    response_serializer=metadata__pb2.AuthenticateResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -817,6 +833,33 @@ class MetadataService:
             '/dfsha.metadata.MetadataService/RegisterBlockReplica',
             metadata__pb2.RegisterBlockReplicaRequest.SerializeToString,
             metadata__pb2.OperationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Authenticate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/Authenticate',
+            metadata__pb2.AuthenticateRequest.SerializeToString,
+            metadata__pb2.AuthenticateResponse.FromString,
             options,
             channel_credentials,
             insecure,

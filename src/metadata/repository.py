@@ -1,9 +1,12 @@
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, text
 
+from src.common.auth import hash_token
 from src.metadata.database import Base, SessionLocal, engine
 from src.metadata.models import (
+    AuthToken,
     Block,
     BlockReplica,
     Entry,
@@ -18,13 +21,47 @@ def initialize_database():
     Base.metadata.create_all(bind=engine)
 
     with SessionLocal() as session:
-        # Usuario inicial para pruebas
-        user = session.get(User, "user-001")
+        users = [
+            ("user-001", "demo"),
+            ("user-002", "demo2"),
+            ("service", "service"),
+        ]
 
-        if not user:
-            user = User(id="user-001", username="demo")
+        for user_id, username in users:
+            if not session.get(User, user_id):
+                session.add(User(id=user_id, username=username))
 
-            session.add(user)
+        session.flush()
+
+        auth_tokens = [
+            (
+                "user-001",
+                os.getenv("DFSHA_DEMO_TOKEN", "dev-demo-token"),
+                False,
+            ),
+            (
+                "user-002",
+                os.getenv("DFSHA_SECOND_USER_TOKEN", "dev-second-token"),
+                False,
+            ),
+            (
+                "service",
+                os.getenv("DFSHA_SERVICE_TOKEN", "dev-service-token"),
+                True,
+            ),
+        ]
+
+        for user_id, token, is_service in auth_tokens:
+            session.execute(
+                delete(AuthToken).where(AuthToken.user_id == user_id)
+            )
+            session.add(
+                AuthToken(
+                    user_id=user_id,
+                    token_hash=hash_token(token),
+                    is_service=is_service,
+                )
+            )
 
         # Registro de los Storage Nodes
         nodes = [

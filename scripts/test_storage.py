@@ -4,11 +4,15 @@ import sys
 import grpc
 
 from src.common import storage_pb2, storage_pb2_grpc
+from src.common.auth import DEFAULT_STORAGE_TOKEN, ClientTokenInterceptor
 
 
 def test_node(address):
 
-    channel = grpc.insecure_channel(address)
+    channel = grpc.intercept_channel(
+        grpc.insecure_channel(address),
+        ClientTokenInterceptor(DEFAULT_STORAGE_TOKEN),
+    )
 
     grpc.channel_ready_future(channel).result(timeout=5)
 

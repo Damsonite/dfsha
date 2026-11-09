@@ -38,6 +38,9 @@ services:
 
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dfsha}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dfsha}
+      DFSHA_DEMO_TOKEN: ${DFSHA_DEMO_TOKEN:-dev-demo-token}
+      DFSHA_SECOND_USER_TOKEN: ${DFSHA_SECOND_USER_TOKEN:-dev-second-token}
+      DFSHA_SERVICE_TOKEN: ${DFSHA_SERVICE_TOKEN:-dev-service-token}
 
     depends_on:
       postgres:
@@ -63,6 +66,8 @@ services:
       UPLOAD_LEASE_TTL_SECONDS: ${UPLOAD_LEASE_TTL_SECONDS:-300}
       HEALTH_CHECK_INTERVAL_SECONDS: ${HEALTH_CHECK_INTERVAL_SECONDS:-5}
       REPAIR_INTERVAL_SECONDS: ${REPAIR_INTERVAL_SECONDS:-30}
+      DFSHA_SERVICE_TOKEN: ${DFSHA_SERVICE_TOKEN:-dev-service-token}
+      DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
 
     depends_on:
       - metadata
@@ -86,6 +91,7 @@ services:
       NODE_ID: storage-1
       GRPC_PORT: 50061
       STORAGE_PATH: /data
+      DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
     ports:
       - "50061:50061"
     volumes:
@@ -103,6 +109,7 @@ services:
       NODE_ID: storage-2
       GRPC_PORT: 50061
       STORAGE_PATH: /data
+      DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
     ports:
       - "50062:50061"
     volumes:
@@ -120,6 +127,7 @@ services:
       NODE_ID: storage-3
       GRPC_PORT: 50061
       STORAGE_PATH: /data
+      DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
     ports:
       - "50063:50061"
     volumes:

@@ -11,6 +11,7 @@ import grpc
 
 from src.client.dfs_client import DFSClient
 from src.common import metadata_pb2, metadata_pb2_grpc
+from src.common.auth import DEFAULT_CLIENT_TOKEN, ClientTokenInterceptor
 
 METADATA_ENDPOINT = "localhost:50051"
 DATA_ENDPOINT = "localhost:50052"
@@ -87,7 +88,10 @@ def release(stub, lease_id):
 
 
 def main():
-    metadata_channel = grpc.insecure_channel(METADATA_ENDPOINT)
+    metadata_channel = grpc.intercept_channel(
+        grpc.insecure_channel(METADATA_ENDPOINT),
+        ClientTokenInterceptor(DEFAULT_CLIENT_TOKEN),
+    )
     wait_for_channel(metadata_channel, "Metadata Service")
     metadata_stub = metadata_pb2_grpc.MetadataServiceStub(metadata_channel)
 

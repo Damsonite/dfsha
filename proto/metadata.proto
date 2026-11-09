@@ -38,6 +38,8 @@ service MetadataService {
   rpc ListBlocksForRepair(ListBlocksForRepairRequest) returns (ListBlocksForRepairResponse);
 
   rpc RegisterBlockReplica(RegisterBlockReplicaRequest) returns (OperationResponse);
+
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
 }
 
 message PrepareUploadRequest {
@@ -193,6 +195,17 @@ message RegisterBlockReplicaRequest {
   string block_id = 1;
   string node_id = 2;
   int32 version = 3;
+}
+
+message AuthenticateRequest {
+  string token = 1;
+}
+
+message AuthenticateResponse {
+  bool success = 1;
+  string user_id = 2;
+  bool is_service = 3;
+  string message = 4;
 }
 
 message HealthRequest {}

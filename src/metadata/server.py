@@ -8,9 +8,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from src.common import metadata_pb2, metadata_pb2_grpc
+from src.common.auth import (
+    AUTH_IS_SERVICE,
+    AUTH_USER_ID,
+    extract_bearer_token,
+    hash_token,
+)
 from src.common.path_utils import InvalidPath, normalize_path
 from src.metadata.database import SessionLocal
 from src.metadata.models import (
+    AuthToken,
     Block,
     BlockReplica,
     Entry,
@@ -36,6 +43,130 @@ def _lease_ttl(requested_ttl):
         )
 
     return requested_ttl
+
+
+def _authorize_owner(context, owner_id):
+    user_id = AUTH_USER_ID.get()
+
+    if not user_id:
+        context.abort(
+            grpc.StatusCode.UNAUTHENTICATED, "Authentication required"
+        )
+
+    if not AUTH_IS_SERVICE.get() and owner_id != user_id:
+        context.abort(grpc.StatusCode.PERMISSION_DENIED, "Owner mismatch")
+
+
+def _authorize_service(context):
+    if not AUTH_IS_SERVICE.get():
+        context.abort(
+            grpc.StatusCode.PERMISSION_DENIED, "Service token required"
+        )
+
+
+class MetadataAuthInterceptor(grpc.ServerInterceptor):
+    PUBLIC_METHODS = frozenset(
+        {
+            "/dfsha.metadata.MetadataService/Health",
+            "/dfsha.metadata.MetadataService/Authenticate",
+        }
+    )
+
+    SERVICE_METHODS = frozenset(
+        {
+            "/dfsha.metadata.MetadataService/RegisterNode",
+            "/dfsha.metadata.MetadataService/SetNodeStatus",
+            "/dfsha.metadata.MetadataService/ListBlocksForRepair",
+            "/dfsha.metadata.MetadataService/RegisterBlockReplica",
+        }
+    )
+
+    def _deny(self, continuation, details, code, message):
+        handler = continuation(details)
+
+        if handler is None:
+            return None
+
+        def denied(request, context):
+            context.abort(code, message)
+
+        return grpc.unary_unary_rpc_method_handler(
+            denied,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
+
+    def intercept_service(self, continuation, handler_call_details):
+        method = handler_call_details.method
+
+        if method in self.PUBLIC_METHODS:
+            return continuation(handler_call_details)
+
+        token = extract_bearer_token(
+            handler_call_details.invocation_metadata
+        )
+
+        if not token:
+            return self._deny(
+                continuation,
+                handler_call_details,
+                grpc.StatusCode.UNAUTHENTICATED,
+                "Missing bearer token",
+            )
+
+        try:
+            with SessionLocal() as session:
+                auth_token = session.scalar(
+                    select(AuthToken).where(
+                        AuthToken.token_hash == hash_token(token)
+                    )
+                )
+
+                if not auth_token:
+                    return self._deny(
+                        continuation,
+                        handler_call_details,
+                        grpc.StatusCode.UNAUTHENTICATED,
+                        "Invalid bearer token",
+                    )
+
+                user_id = auth_token.user_id
+                is_service = auth_token.is_service
+        except Exception as error:
+            return self._deny(
+                continuation,
+                handler_call_details,
+                grpc.StatusCode.INTERNAL,
+                f"Authentication backend failed: {error}",
+            )
+
+        if method in self.SERVICE_METHODS and not is_service:
+            return self._deny(
+                continuation,
+                handler_call_details,
+                grpc.StatusCode.PERMISSION_DENIED,
+                "Service token required",
+            )
+
+        handler = continuation(handler_call_details)
+
+        if handler is None:
+            return None
+
+        if handler.unary_unary is None:
+            return handler
+
+        def authenticated(request, context):
+            AUTH_USER_ID.set(user_id)
+            AUTH_IS_SERVICE.set(is_service)
+
+            return handler.unary_unary(request, context)
+
+        return grpc.unary_unary_rpc_method_handler(
+            authenticated,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
 
 
 def _root_entry_response():
@@ -76,6 +207,8 @@ def _get_child(session, owner_id, parent_id, name):
 
 class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
     def Mkdir(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         with SessionLocal() as session:
             user = session.get(User, request.owner_id)
@@ -146,6 +279,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def ListDir(self, request, context):
 
+        _authorize_owner(context, request.owner_id)
+
         with SessionLocal() as session:
             parent_id = None
 
@@ -187,6 +322,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def Stat(self, request, context):
 
+        _authorize_owner(context, request.owner_id)
+
         with SessionLocal() as session:
             try:
                 entry_id = UUID(request.entry_id)
@@ -210,6 +347,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
     def Remove(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         with SessionLocal() as session:
             try:
@@ -248,6 +387,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             return metadata_pb2.OperationResponse(success=True, message="Entry removed")
 
     def RegisterFile(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         with SessionLocal() as session:
             user = session.get(User, request.owner_id)
@@ -324,6 +465,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def LocateBlocks(self, request, context):
 
+        _authorize_owner(context, request.owner_id)
+
         with SessionLocal() as session:
             try:
                 file_id = UUID(request.file_id)
@@ -375,6 +518,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def RegisterNode(self, request, context):
 
+        _authorize_service(context)
+
         if not request.node_id or not request.endpoint:
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT, "Node ID and endpoint are required"
@@ -401,6 +546,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def SetNodeStatus(self, request, context):
 
+        _authorize_service(context)
+
         if request.status not in ("ACTIVE", "INACTIVE"):
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
@@ -421,6 +568,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
     def ListBlocksForRepair(self, request, context):
+
+        _authorize_service(context)
 
         if request.target_replicas <= 0:
             context.abort(
@@ -477,6 +626,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def RegisterBlockReplica(self, request, context):
 
+        _authorize_service(context)
+
         try:
             block_id = UUID(request.block_id)
         except ValueError:
@@ -528,11 +679,41 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
                 success=True, message="Replica registered"
             )
 
+    def Authenticate(self, request, context):
+
+        token = request.token.strip()
+
+        if not token:
+            context.abort(
+                grpc.StatusCode.UNAUTHENTICATED, "Token is required"
+            )
+
+        with SessionLocal() as session:
+            auth_token = session.scalar(
+                select(AuthToken).where(
+                    AuthToken.token_hash == hash_token(token)
+                )
+            )
+
+            if not auth_token:
+                context.abort(
+                    grpc.StatusCode.UNAUTHENTICATED, "Invalid token"
+                )
+
+            return metadata_pb2.AuthenticateResponse(
+                success=True,
+                user_id=auth_token.user_id,
+                is_service=auth_token.is_service,
+                message="Authenticated",
+            )
+
     def Health(self, request, context):
 
         return metadata_pb2.HealthResponse(status="HEALTHY")
 
     def CommitFile(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         with SessionLocal() as session:
             user = session.get(User, request.owner_id)
@@ -755,6 +936,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
         remains the uq_entry_namespace index enforced by CommitFile.
         """
 
+        _authorize_owner(context, request.owner_id)
+
         with SessionLocal() as session:
             if not session.get(User, request.owner_id):
                 context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
@@ -803,6 +986,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
     def AcquireUploadLease(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         try:
             ttl_seconds = _lease_ttl(request.ttl_seconds)
@@ -896,6 +1081,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def RenewUploadLease(self, request, context):
 
+        _authorize_owner(context, request.owner_id)
+
         try:
             lease_id = UUID(request.lease_id)
         except ValueError:
@@ -939,6 +1126,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
     def ReleaseUploadLease(self, request, context):
 
+        _authorize_owner(context, request.owner_id)
+
         try:
             lease_id = UUID(request.lease_id)
         except ValueError:
@@ -958,6 +1147,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
     def ResolvePath(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         try:
             normalized = normalize_path(request.path)
@@ -996,6 +1187,8 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             return _entry_response(entry, "Path resolved")
 
     def MkdirPath(self, request, context):
+
+        _authorize_owner(context, request.owner_id)
 
         try:
             normalized = normalize_path(request.path)
@@ -1086,7 +1279,10 @@ def serve():
 
     initialize_database()
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        interceptors=(MetadataAuthInterceptor(),),
+    )
 
     metadata_pb2_grpc.add_MetadataServiceServicer_to_server(MetadataServicer(), server)
 

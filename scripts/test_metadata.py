@@ -1,11 +1,15 @@
 import grpc
 
 from src.common import metadata_pb2, metadata_pb2_grpc
+from src.common.auth import DEFAULT_CLIENT_TOKEN, ClientTokenInterceptor
 
 
 def main():
 
-    channel = grpc.insecure_channel("localhost:50051")
+    channel = grpc.intercept_channel(
+        grpc.insecure_channel("localhost:50051"),
+        ClientTokenInterceptor(DEFAULT_CLIENT_TOKEN),
+    )
 
     grpc.channel_ready_future(channel).result(timeout=10)
 

@@ -8,6 +8,11 @@ import grpc
 
 from src.client.dfs_client import DFSClient
 from src.common import data_pb2, data_pb2_grpc, metadata_pb2, metadata_pb2_grpc
+from src.common.auth import (
+    DEFAULT_CLIENT_TOKEN,
+    DEFAULT_SERVICE_TOKEN,
+    ClientTokenInterceptor,
+)
 
 METADATA_ENDPOINT = "localhost:50051"
 DATA_ENDPOINT = "localhost:50052"
@@ -94,11 +99,17 @@ def endpoint_count(metadata_stub, file_id):
 
 
 def main():
-    metadata_channel = grpc.insecure_channel(METADATA_ENDPOINT)
+    metadata_channel = grpc.intercept_channel(
+        grpc.insecure_channel(METADATA_ENDPOINT),
+        ClientTokenInterceptor(DEFAULT_CLIENT_TOKEN),
+    )
     wait_for_channel(metadata_channel, "Metadata Service")
     metadata_stub = metadata_pb2_grpc.MetadataServiceStub(metadata_channel)
 
-    data_channel = grpc.insecure_channel(DATA_ENDPOINT)
+    data_channel = grpc.intercept_channel(
+        grpc.insecure_channel(DATA_ENDPOINT),
+        ClientTokenInterceptor(DEFAULT_SERVICE_TOKEN),
+    )
     wait_for_channel(data_channel, "Data Service")
     data_stub = data_pb2_grpc.DataServiceStub(data_channel)
 

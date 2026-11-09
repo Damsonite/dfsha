@@ -1,10 +1,55 @@
 import os
+import secrets
 from concurrent import futures
 
 import grpc
 
 from src.common import storage_pb2, storage_pb2_grpc
+from src.common.auth import DEFAULT_STORAGE_TOKEN, extract_bearer_token
 from src.storage.block_manager import BlockManager
+
+
+class StorageAuthInterceptor(grpc.ServerInterceptor):
+    PUBLIC_METHODS = frozenset(
+        {"/dfsha.storage.StorageNode/Health"}
+    )
+
+    def __init__(self):
+        self.token = os.getenv(
+            "DFSHA_STORAGE_TOKEN", DEFAULT_STORAGE_TOKEN
+        )
+
+    def _deny(self, continuation, details, message):
+        handler = continuation(details)
+
+        if handler is None:
+            return None
+
+        def denied(request, context):
+            context.abort(grpc.StatusCode.UNAUTHENTICATED, message)
+
+        return grpc.unary_unary_rpc_method_handler(
+            denied,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
+
+    def intercept_service(self, continuation, handler_call_details):
+        if handler_call_details.method in self.PUBLIC_METHODS:
+            return continuation(handler_call_details)
+
+        token = extract_bearer_token(
+            handler_call_details.invocation_metadata
+        )
+
+        if not token or not secrets.compare_digest(token, self.token):
+            return self._deny(
+                continuation,
+                handler_call_details,
+                "Invalid storage node token",
+            )
+
+        return continuation(handler_call_details)
 
 
 class StorageNodeServicer(storage_pb2_grpc.StorageNodeServicer):
@@ -109,6 +154,7 @@ def serve():
 
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=10),
+        interceptors=(StorageAuthInterceptor(),),
         options=[
             ("grpc.max_receive_message_length", 5 * 1024 * 1024),
             ("grpc.max_send_message_length", 5 * 1024 * 1024),

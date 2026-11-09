@@ -10,6 +10,7 @@ from src.common import (
     metadata_pb2,
     metadata_pb2_grpc,
 )
+from src.common.auth import DEFAULT_CLIENT_TOKEN, ClientTokenInterceptor
 from src.common.path_utils import (
     InvalidPath,
     normalize_path,
@@ -26,12 +27,15 @@ class DownloadIntegrityError(Exception):
 
 
 class DFSClient:
-    def __init__(self, endpoint=None, metadata_endpoint=None):
+    def __init__(
+        self, endpoint=None, metadata_endpoint=None, token=None
+    ):
 
         endpoint = endpoint or DEFAULT_DATA_ENDPOINT
         metadata_endpoint = metadata_endpoint or DEFAULT_METADATA_ENDPOINT
+        self.token = token or DEFAULT_CLIENT_TOKEN
 
-        self.channel = grpc.insecure_channel(
+        data_channel = grpc.insecure_channel(
             endpoint,
             options=[
                 ("grpc.max_receive_message_length", 8 * 1024 * 1024),
@@ -39,9 +43,17 @@ class DFSClient:
             ],
         )
 
+        self.channel = grpc.intercept_channel(
+            data_channel, ClientTokenInterceptor(self.token)
+        )
+
         self.stub = data_pb2_grpc.DataServiceStub(self.channel)
 
-        self.metadata_channel = grpc.insecure_channel(metadata_endpoint)
+        metadata_channel = grpc.insecure_channel(metadata_endpoint)
+
+        self.metadata_channel = grpc.intercept_channel(
+            metadata_channel, ClientTokenInterceptor(self.token)
+        )
 
         self.metadata_stub = metadata_pb2_grpc.MetadataServiceStub(
             self.metadata_channel
