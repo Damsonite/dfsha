@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ndata.proto\x12\ndfsha.data\"E\n\x0cUploadHeader\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x11\n\tparent_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\"\x1b\n\x0bUploadChunk\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\"t\n\x11UploadFileRequest\x12*\n\x06header\x18\x01 \x01(\x0b\x32\x18.dfsha.data.UploadHeaderH\x00\x12(\n\x05\x63hunk\x18\x02 \x01(\x0b\x32\x17.dfsha.data.UploadChunkH\x00\x42\t\n\x07payload\"\x8e\x01\n\x12UploadFileResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07\x66ile_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x0c\n\x04size\x18\x04 \x01(\x03\x12\x10\n\x08\x63hecksum\x18\x05 \x01(\t\x12\x13\n\x0b\x62lock_count\x18\x06 \x01(\x05\x12\x0f\n\x07message\x18\x07 \x01(\t\"8\n\x13\x44ownloadFileRequest\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66ile_id\x18\x02 \x01(\t\"9\n\x14\x44ownloadFileResponse\x12\x13\n\x0b\x62lock_index\x18\x01 \x01(\x05\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"8\n\x12RemoveEntryRequest\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x10\n\x08\x65ntry_id\x18\x02 \x01(\t\"7\n\x13RemoveEntryResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"\x0f\n\rHealthRequest\" \n\x0eHealthResponse\x12\x0e\n\x06status\x18\x01 \x01(\t2\xc2\x02\n\x0b\x44\x61taService\x12M\n\nUploadFile\x12\x1d.dfsha.data.UploadFileRequest\x1a\x1e.dfsha.data.UploadFileResponse(\x01\x12S\n\x0c\x44ownloadFile\x12\x1f.dfsha.data.DownloadFileRequest\x1a .dfsha.data.DownloadFileResponse0\x01\x12N\n\x0bRemoveEntry\x12\x1e.dfsha.data.RemoveEntryRequest\x1a\x1f.dfsha.data.RemoveEntryResponse\x12?\n\x06Health\x12\x19.dfsha.data.HealthRequest\x1a\x1a.dfsha.data.HealthResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ndata.proto\x12\ndfsha.data\"E\n\x0cUploadHeader\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x11\n\tparent_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\"\x1b\n\x0bUploadChunk\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\"t\n\x11UploadFileRequest\x12*\n\x06header\x18\x01 \x01(\x0b\x32\x18.dfsha.data.UploadHeaderH\x00\x12(\n\x05\x63hunk\x18\x02 \x01(\x0b\x32\x17.dfsha.data.UploadChunkH\x00\x42\t\n\x07payload\"\x8e\x01\n\x12UploadFileResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07\x66ile_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x0c\n\x04size\x18\x04 \x01(\x03\x12\x10\n\x08\x63hecksum\x18\x05 \x01(\t\x12\x13\n\x0b\x62lock_count\x18\x06 \x01(\x05\x12\x0f\n\x07message\x18\x07 \x01(\t\"8\n\x13\x44ownloadFileRequest\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66ile_id\x18\x02 \x01(\t\"9\n\x14\x44ownloadFileResponse\x12\x13\n\x0b\x62lock_index\x18\x01 \x01(\x05\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"8\n\x12RemoveEntryRequest\x12\x10\n\x08owner_id\x18\x01 \x01(\t\x12\x10\n\x08\x65ntry_id\x18\x02 \x01(\t\"7\n\x13RemoveEntryResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"(\n\rRepairRequest\x12\x17\n\x0ftarget_replicas\x18\x01 \x01(\x05\"w\n\x0eRepairResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0e\x62locks_checked\x18\x02 \x01(\x05\x12\x19\n\x11replicas_repaired\x18\x03 \x01(\x05\x12\x10\n\x08\x66\x61ilures\x18\x04 \x03(\t\x12\x0f\n\x07message\x18\x05 \x01(\t\"\x0f\n\rHealthRequest\" \n\x0eHealthResponse\x12\x0e\n\x06status\x18\x01 \x01(\t2\x83\x03\n\x0b\x44\x61taService\x12M\n\nUploadFile\x12\x1d.dfsha.data.UploadFileRequest\x1a\x1e.dfsha.data.UploadFileResponse(\x01\x12S\n\x0c\x44ownloadFile\x12\x1f.dfsha.data.DownloadFileRequest\x1a .dfsha.data.DownloadFileResponse0\x01\x12N\n\x0bRemoveEntry\x12\x1e.dfsha.data.RemoveEntryRequest\x1a\x1f.dfsha.data.RemoveEntryResponse\x12?\n\x06Repair\x12\x19.dfsha.data.RepairRequest\x1a\x1a.dfsha.data.RepairResponse\x12?\n\x06Health\x12\x19.dfsha.data.HealthRequest\x1a\x1a.dfsha.data.HealthResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -47,10 +47,14 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_REMOVEENTRYREQUEST']._serialized_end=562
   _globals['_REMOVEENTRYRESPONSE']._serialized_start=564
   _globals['_REMOVEENTRYRESPONSE']._serialized_end=619
-  _globals['_HEALTHREQUEST']._serialized_start=621
-  _globals['_HEALTHREQUEST']._serialized_end=636
-  _globals['_HEALTHRESPONSE']._serialized_start=638
-  _globals['_HEALTHRESPONSE']._serialized_end=670
-  _globals['_DATASERVICE']._serialized_start=673
-  _globals['_DATASERVICE']._serialized_end=995
+  _globals['_REPAIRREQUEST']._serialized_start=621
+  _globals['_REPAIRREQUEST']._serialized_end=661
+  _globals['_REPAIRRESPONSE']._serialized_start=663
+  _globals['_REPAIRRESPONSE']._serialized_end=782
+  _globals['_HEALTHREQUEST']._serialized_start=784
+  _globals['_HEALTHREQUEST']._serialized_end=799
+  _globals['_HEALTHRESPONSE']._serialized_start=801
+  _globals['_HEALTHRESPONSE']._serialized_end=833
+  _globals['_DATASERVICE']._serialized_start=836
+  _globals['_DATASERVICE']._serialized_end=1223
 # @@protoc_insertion_point(module_scope)

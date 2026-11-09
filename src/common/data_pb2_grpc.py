@@ -49,6 +49,11 @@ class DataServiceStub:
                 request_serializer=data__pb2.RemoveEntryRequest.SerializeToString,
                 response_deserializer=data__pb2.RemoveEntryResponse.FromString,
                 _registered_method=True)
+        self.Repair = channel.unary_unary(
+                '/dfsha.data.DataService/Repair',
+                request_serializer=data__pb2.RepairRequest.SerializeToString,
+                response_deserializer=data__pb2.RepairResponse.FromString,
+                _registered_method=True)
         self.Health = channel.unary_unary(
                 '/dfsha.data.DataService/Health',
                 request_serializer=data__pb2.HealthRequest.SerializeToString,
@@ -77,6 +82,12 @@ class DataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Repair(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Health(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -100,6 +111,11 @@ def add_DataServiceServicer_to_server(servicer, server):
                     servicer.RemoveEntry,
                     request_deserializer=data__pb2.RemoveEntryRequest.FromString,
                     response_serializer=data__pb2.RemoveEntryResponse.SerializeToString,
+            ),
+            'Repair': grpc.unary_unary_rpc_method_handler(
+                    servicer.Repair,
+                    request_deserializer=data__pb2.RepairRequest.FromString,
+                    response_serializer=data__pb2.RepairResponse.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
@@ -188,6 +204,33 @@ class DataService:
             '/dfsha.data.DataService/RemoveEntry',
             data__pb2.RemoveEntryRequest.SerializeToString,
             data__pb2.RemoveEntryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Repair(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.data.DataService/Repair',
+            data__pb2.RepairRequest.SerializeToString,
+            data__pb2.RepairResponse.FromString,
             options,
             channel_credentials,
             insecure,

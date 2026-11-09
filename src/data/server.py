@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+import threading
 import time
 import uuid
 from concurrent import futures
@@ -23,6 +24,8 @@ WRITE_QUORUM = 2
 MAX_FILENAME_LENGTH = 255
 DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_LEASE_TTL_SECONDS = 300
+DEFAULT_HEALTH_CHECK_INTERVAL_SECONDS = 5
+DEFAULT_REPAIR_INTERVAL_SECONDS = 30
 
 GRPC_CHANNEL_OPTIONS = [
     ("grpc.max_receive_message_length", 5 * 1024 * 1024),
@@ -86,6 +89,19 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             "UPLOAD_LEASE_TTL_SECONDS", DEFAULT_LEASE_TTL_SECONDS
         )
 
+        self.health_check_interval_seconds = self._read_positive_int_env(
+            "HEALTH_CHECK_INTERVAL_SECONDS",
+            DEFAULT_HEALTH_CHECK_INTERVAL_SECONDS,
+        )
+
+        self.repair_interval_seconds = self._read_positive_int_env(
+            "REPAIR_INTERVAL_SECONDS", DEFAULT_REPAIR_INTERVAL_SECONDS
+        )
+
+        self.node_status = {}
+        self.maintenance_stop = threading.Event()
+        self.maintenance_thread = None
+
     @staticmethod
     def _read_positive_int_env(name, default):
         raw_value = os.getenv(name, str(default))
@@ -103,6 +119,77 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             )
 
         return value
+
+    def start_maintenance(self):
+        if self.maintenance_thread and self.maintenance_thread.is_alive():
+            return
+
+        self.maintenance_thread = threading.Thread(
+            target=self._maintenance_loop,
+            name="dfsha-maintenance",
+            daemon=True,
+        )
+        self.maintenance_thread.start()
+
+    def _maintenance_loop(self):
+        next_repair = 0.0
+
+        while not self.maintenance_stop.is_set():
+            self._refresh_node_health()
+
+            if time.monotonic() >= next_repair:
+                try:
+                    result = self._repair(REPLICATION_FACTOR)
+
+                    if result.failures:
+                        logger.warning(
+                            "Repair completed with %d failure(s): %s",
+                            len(result.failures),
+                            "; ".join(result.failures[:5]),
+                        )
+                    elif result.replicas_repaired:
+                        logger.info(
+                            "Repair checked %d block(s) and repaired %d replica(s)",
+                            result.blocks_checked,
+                            result.replicas_repaired,
+                        )
+                except Exception as error:
+                    logger.warning("Repair cycle failed: %s", error)
+
+                next_repair = time.monotonic() + self.repair_interval_seconds
+
+            self.maintenance_stop.wait(self.health_check_interval_seconds)
+
+    def _refresh_node_health(self):
+        for node_id, stub in self.storage_stubs.items():
+            try:
+                response = stub.Health(
+                    storage_pb2.HealthRequest(), timeout=2
+                )
+                status = (
+                    "ACTIVE" if response.status == "HEALTHY" else "INACTIVE"
+                )
+            except grpc.RpcError:
+                status = "INACTIVE"
+
+            if self.node_status.get(node_id) == status:
+                continue
+
+            try:
+                self.metadata.SetNodeStatus(
+                    metadata_pb2.SetNodeStatusRequest(
+                        node_id=node_id,
+                        status=status,
+                    ),
+                    timeout=5,
+                )
+                self.node_status[node_id] = status
+            except grpc.RpcError as error:
+                logger.warning(
+                    "Could not update health for %s: %s",
+                    node_id,
+                    error,
+                )
 
     def UploadFile(self, request_iterator, context):
 
@@ -626,7 +713,9 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             if entry.type == "FILE":
                 locations = self.metadata.LocateBlocks(
                     metadata_pb2.LocateBlocksRequest(
-                        owner_id=request.owner_id, file_id=request.entry_id
+                        owner_id=request.owner_id,
+                        file_id=request.entry_id,
+                        include_inactive=True,
                     ),
                     timeout=15,
                 )
@@ -688,6 +777,296 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         except grpc.RpcError as error:
             context.abort(error.code(), error.details())
 
+    def Repair(self, request, context):
+
+        target_replicas = request.target_replicas or REPLICATION_FACTOR
+
+        if target_replicas < 1 or target_replicas > REPLICATION_FACTOR:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"target_replicas must be between 1 and {REPLICATION_FACTOR}",
+            )
+
+        try:
+            return self._repair(target_replicas)
+        except grpc.RpcError as error:
+            context.abort(error.code(), error.details())
+
+    def _repair(self, target_replicas):
+
+        repair_blocks = self.metadata.ListBlocksForRepair(
+            metadata_pb2.ListBlocksForRepairRequest(
+                target_replicas=target_replicas
+            ),
+            timeout=30,
+        ).blocks
+
+        blocks_checked = 0
+        replicas_repaired = 0
+        failures = []
+
+        for block in repair_blocks:
+            blocks_checked += 1
+
+            active_node_ids = set(block.active_node_ids)
+            targets = []
+
+            for node_id in block.node_ids:
+                if node_id not in active_node_ids:
+                    # No spare node exists in a three-node RF=3 cluster.
+                    # The replica is repaired when the node returns.
+                    continue
+
+                needs_repair, failure = self._replica_needs_repair(
+                    node_id, block
+                )
+
+                if failure:
+                    failures.append(failure)
+                    continue
+
+                if needs_repair:
+                    targets.append((node_id, False))
+
+            existing_node_ids = set(block.node_ids)
+
+            for candidate in self.ring.get_nodes(
+                block.block_id, count=target_replicas
+            ):
+                if candidate in existing_node_ids:
+                    continue
+
+                if not self._node_is_healthy(candidate):
+                    continue
+
+                targets.append((candidate, True))
+
+            if not targets:
+                continue
+
+            source_data, source_failures = self._read_repair_source(block)
+
+            if source_data is None:
+                failures.append(
+                    f"{block.block_id}: no valid source replica "
+                    f"({'; '.join(source_failures)})"
+                )
+                continue
+
+            for node_id, register_if_valid in targets:
+                repaired, failure = self._repair_replica(
+                    node_id,
+                    block,
+                    source_data,
+                    register_if_valid=register_if_valid,
+                )
+
+                if repaired:
+                    replicas_repaired += 1
+
+                if failure:
+                    failures.append(failure)
+
+        return data_pb2.RepairResponse(
+            success=not failures,
+            blocks_checked=blocks_checked,
+            replicas_repaired=replicas_repaired,
+            failures=failures,
+            message=(
+                "Repair completed"
+                if not failures
+                else "Repair completed with failures"
+            ),
+        )
+
+    def _read_repair_source(self, block):
+
+        failures = []
+
+        for endpoint in block.active_node_endpoints:
+            stub = self.storage_stubs_by_endpoint.get(endpoint)
+
+            if stub is None:
+                failures.append(f"{endpoint}: unknown storage endpoint")
+                continue
+
+            try:
+                response = stub.ReadBlock(
+                    storage_pb2.ReadBlockRequest(block_id=block.block_id),
+                    timeout=15,
+                )
+            except grpc.RpcError as error:
+                failures.append(
+                    f"{endpoint}: {error.code().name}: {error.details()}"
+                )
+                continue
+
+            if not response.success:
+                failures.append(f"{endpoint}: rejected: {response.message}")
+                continue
+
+            if response.checksum != block.checksum:
+                failures.append(f"{endpoint}: checksum metadata mismatch")
+                continue
+
+            if len(response.data) != block.size:
+                failures.append(
+                    f"{endpoint}: returned {len(response.data)} bytes, "
+                    f"expected {block.size}"
+                )
+                continue
+
+            if hashlib.sha256(response.data).hexdigest() != block.checksum:
+                failures.append(f"{endpoint}: data checksum mismatch")
+                continue
+
+            return response.data, failures
+
+        return None, failures
+
+    def _node_is_healthy(self, node_id):
+
+        stub = self.storage_stubs.get(node_id)
+
+        if stub is None:
+            return False
+
+        try:
+            response = stub.Health(storage_pb2.HealthRequest(), timeout=2)
+        except grpc.RpcError:
+            return False
+
+        return response.status == "HEALTHY"
+
+    def _replica_needs_repair(self, node_id, block):
+
+        stub = self.storage_stubs.get(node_id)
+
+        if stub is None:
+            return True, f"{node_id}: unknown storage node"
+
+        try:
+            status = stub.BlockStatus(
+                storage_pb2.BlockStatusRequest(block_id=block.block_id),
+                timeout=10,
+            )
+        except grpc.RpcError as error:
+            return (
+                True,
+                f"{node_id}: {error.code().name}: {error.details()}",
+            )
+
+        valid = (
+            status.exists
+            and status.valid
+            and status.checksum == block.checksum
+            and status.version == block.version
+        )
+
+        return (not valid), None
+
+    def _repair_replica(
+        self, node_id, block, source_data, register_if_valid=False
+    ):
+
+        stub = self.storage_stubs.get(node_id)
+
+        if stub is None:
+            return False, f"{node_id}: unknown storage node"
+
+        try:
+            status = stub.BlockStatus(
+                storage_pb2.BlockStatusRequest(block_id=block.block_id),
+                timeout=10,
+            )
+        except grpc.RpcError as error:
+            return (
+                False,
+                f"{node_id}: {error.code().name}: {error.details()}",
+            )
+
+        valid = (
+            status.exists
+            and status.valid
+            and status.checksum == block.checksum
+            and status.version == block.version
+        )
+
+        if valid and not register_if_valid:
+            return False, None
+
+        if valid and register_if_valid:
+            try:
+                self.metadata.RegisterBlockReplica(
+                    metadata_pb2.RegisterBlockReplicaRequest(
+                        block_id=block.block_id,
+                        node_id=node_id,
+                        version=block.version,
+                    ),
+                    timeout=10,
+                )
+            except grpc.RpcError as error:
+                return (
+                    False,
+                    f"{node_id}: could not register replica: "
+                    f"{error.code().name}: {error.details()}",
+                )
+
+            return True, None
+
+        if status.exists:
+            try:
+                stub.DeleteBlock(
+                    storage_pb2.DeleteBlockRequest(
+                        block_id=block.block_id
+                    ),
+                    timeout=10,
+                )
+            except grpc.RpcError as error:
+                return (
+                    False,
+                    f"{node_id}: could not delete invalid replica: "
+                    f"{error.code().name}: {error.details()}",
+                )
+
+        try:
+            response = stub.WriteBlock(
+                storage_pb2.WriteBlockRequest(
+                    block_id=block.block_id,
+                    data=source_data,
+                    checksum=block.checksum,
+                    version=block.version,
+                ),
+                timeout=30,
+            )
+        except grpc.RpcError as error:
+            return (
+                False,
+                f"{node_id}: write failed: "
+                f"{error.code().name}: {error.details()}",
+            )
+
+        if not response.success:
+            return False, f"{node_id}: write rejected: {response.message}"
+
+        try:
+            self.metadata.RegisterBlockReplica(
+                metadata_pb2.RegisterBlockReplicaRequest(
+                    block_id=block.block_id,
+                    node_id=node_id,
+                    version=block.version,
+                ),
+                timeout=10,
+            )
+        except grpc.RpcError as error:
+            return (
+                False,
+                f"{node_id}: could not register replica: "
+                f"{error.code().name}: {error.details()}",
+            )
+
+        return True, None
+
     def Health(self, request, context):
 
         return data_pb2.HealthResponse(status="HEALTHY")
@@ -703,11 +1082,15 @@ def serve():
         ],
     )
 
-    data_pb2_grpc.add_DataServiceServicer_to_server(DataServicer(), server)
+    servicer = DataServicer()
+
+    data_pb2_grpc.add_DataServiceServicer_to_server(servicer, server)
 
     server.add_insecure_port("[::]:50052")
 
     server.start()
+
+    servicer.start_maintenance()
 
     print("Data Service listening on port 50052")
 

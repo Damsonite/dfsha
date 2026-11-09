@@ -9,6 +9,8 @@ service DataService {
 
   rpc RemoveEntry(RemoveEntryRequest) returns (RemoveEntryResponse);
 
+  rpc Repair(RepairRequest) returns (RepairResponse);
+
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -57,6 +59,18 @@ message RemoveEntryRequest {
 message RemoveEntryResponse {
   bool success = 1;
   string message = 2;
+}
+
+message RepairRequest {
+  int32 target_replicas = 1;
+}
+
+message RepairResponse {
+  bool success = 1;
+  int32 blocks_checked = 2;
+  int32 replicas_repaired = 3;
+  repeated string failures = 4;
+  string message = 5;
 }
 
 message HealthRequest {}

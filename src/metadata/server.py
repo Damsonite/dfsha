@@ -344,15 +344,19 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             locations = []
 
             for block in blocks:
+                conditions = [
+                    BlockReplica.block_id == block.id,
+                    BlockReplica.state == "READY",
+                    BlockReplica.version == block.version,
+                ]
+
+                if not request.include_inactive:
+                    conditions.append(StorageNode.status == "ACTIVE")
+
                 replicas = session.execute(
                     select(BlockReplica, StorageNode)
                     .join(StorageNode, BlockReplica.node_id == StorageNode.id)
-                    .where(
-                        BlockReplica.block_id == block.id,
-                        BlockReplica.state == "READY",
-                        BlockReplica.version == block.version,
-                        StorageNode.status == "ACTIVE",
-                    )
+                    .where(*conditions)
                 ).all()
 
                 locations.append(
@@ -393,6 +397,135 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
             return metadata_pb2.OperationResponse(
                 success=True, message="Node registered"
+            )
+
+    def SetNodeStatus(self, request, context):
+
+        if request.status not in ("ACTIVE", "INACTIVE"):
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Node status must be ACTIVE or INACTIVE",
+            )
+
+        with SessionLocal() as session:
+            node = session.get(StorageNode, request.node_id)
+
+            if not node:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Storage node not found")
+
+            node.status = request.status
+            session.commit()
+
+            return metadata_pb2.OperationResponse(
+                success=True, message=f"Node status set to {request.status}"
+            )
+
+    def ListBlocksForRepair(self, request, context):
+
+        if request.target_replicas <= 0:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "target_replicas must be greater than zero",
+            )
+
+        with SessionLocal() as session:
+            blocks = session.scalars(
+                select(Block).order_by(Block.file_id, Block.block_index)
+            ).all()
+
+            repair_blocks = []
+
+            for block in blocks:
+                replicas = session.execute(
+                    select(BlockReplica, StorageNode)
+                    .join(StorageNode, BlockReplica.node_id == StorageNode.id)
+                    .where(
+                        BlockReplica.block_id == block.id,
+                        BlockReplica.state == "READY",
+                    )
+                ).all()
+
+                node_ids = [node.id for _, node in replicas]
+
+                active_replicas = [
+                    (replica, node)
+                    for replica, node in replicas
+                    if node.status == "ACTIVE"
+                ]
+
+                repair_blocks.append(
+                    metadata_pb2.RepairBlock(
+                        block_id=str(block.id),
+                        file_id=str(block.file_id),
+                        block_index=block.block_index,
+                        size=block.size,
+                        checksum=block.checksum,
+                        version=block.version,
+                        node_ids=node_ids,
+                        active_node_ids=[
+                            node.id for _, node in active_replicas
+                        ],
+                        active_node_endpoints=[
+                            node.endpoint for _, node in active_replicas
+                        ],
+                    )
+                )
+
+            return metadata_pb2.ListBlocksForRepairResponse(
+                blocks=repair_blocks
+            )
+
+    def RegisterBlockReplica(self, request, context):
+
+        try:
+            block_id = UUID(request.block_id)
+        except ValueError:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid block ID")
+
+        with SessionLocal() as session:
+            block = session.get(Block, block_id)
+
+            if not block:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Block not found")
+
+            node = session.get(StorageNode, request.node_id)
+
+            if not node:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Storage node not found")
+
+            version = request.version if request.version > 0 else block.version
+
+            replica = session.scalar(
+                select(BlockReplica).where(
+                    BlockReplica.block_id == block.id,
+                    BlockReplica.node_id == node.id,
+                )
+            )
+
+            if replica:
+                replica.state = "READY"
+                replica.version = version
+            else:
+                session.add(
+                    BlockReplica(
+                        block_id=block.id,
+                        node_id=node.id,
+                        state="READY",
+                        version=version,
+                    )
+                )
+
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+
+                return metadata_pb2.OperationResponse(
+                    success=True, message="Replica already registered"
+                )
+
+            return metadata_pb2.OperationResponse(
+                success=True, message="Replica registered"
             )
 
     def Health(self, request, context):

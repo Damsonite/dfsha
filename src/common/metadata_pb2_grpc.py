@@ -109,6 +109,21 @@ class MetadataServiceStub:
                 request_serializer=metadata__pb2.ReleaseUploadLeaseRequest.SerializeToString,
                 response_deserializer=metadata__pb2.OperationResponse.FromString,
                 _registered_method=True)
+        self.SetNodeStatus = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/SetNodeStatus',
+                request_serializer=metadata__pb2.SetNodeStatusRequest.SerializeToString,
+                response_deserializer=metadata__pb2.OperationResponse.FromString,
+                _registered_method=True)
+        self.ListBlocksForRepair = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/ListBlocksForRepair',
+                request_serializer=metadata__pb2.ListBlocksForRepairRequest.SerializeToString,
+                response_deserializer=metadata__pb2.ListBlocksForRepairResponse.FromString,
+                _registered_method=True)
+        self.RegisterBlockReplica = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/RegisterBlockReplica',
+                request_serializer=metadata__pb2.RegisterBlockReplicaRequest.SerializeToString,
+                response_deserializer=metadata__pb2.OperationResponse.FromString,
+                _registered_method=True)
 
 
 class MetadataServiceServicer:
@@ -204,6 +219,24 @@ class MetadataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SetNodeStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListBlocksForRepair(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RegisterBlockReplica(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MetadataServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -280,6 +313,21 @@ def add_MetadataServiceServicer_to_server(servicer, server):
             'ReleaseUploadLease': grpc.unary_unary_rpc_method_handler(
                     servicer.ReleaseUploadLease,
                     request_deserializer=metadata__pb2.ReleaseUploadLeaseRequest.FromString,
+                    response_serializer=metadata__pb2.OperationResponse.SerializeToString,
+            ),
+            'SetNodeStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetNodeStatus,
+                    request_deserializer=metadata__pb2.SetNodeStatusRequest.FromString,
+                    response_serializer=metadata__pb2.OperationResponse.SerializeToString,
+            ),
+            'ListBlocksForRepair': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListBlocksForRepair,
+                    request_deserializer=metadata__pb2.ListBlocksForRepairRequest.FromString,
+                    response_serializer=metadata__pb2.ListBlocksForRepairResponse.SerializeToString,
+            ),
+            'RegisterBlockReplica': grpc.unary_unary_rpc_method_handler(
+                    servicer.RegisterBlockReplica,
+                    request_deserializer=metadata__pb2.RegisterBlockReplicaRequest.FromString,
                     response_serializer=metadata__pb2.OperationResponse.SerializeToString,
             ),
     }
@@ -687,6 +735,87 @@ class MetadataService:
             target,
             '/dfsha.metadata.MetadataService/ReleaseUploadLease',
             metadata__pb2.ReleaseUploadLeaseRequest.SerializeToString,
+            metadata__pb2.OperationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetNodeStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/SetNodeStatus',
+            metadata__pb2.SetNodeStatusRequest.SerializeToString,
+            metadata__pb2.OperationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListBlocksForRepair(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/ListBlocksForRepair',
+            metadata__pb2.ListBlocksForRepairRequest.SerializeToString,
+            metadata__pb2.ListBlocksForRepairResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RegisterBlockReplica(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/RegisterBlockReplica',
+            metadata__pb2.RegisterBlockReplicaRequest.SerializeToString,
             metadata__pb2.OperationResponse.FromString,
             options,
             channel_credentials,
