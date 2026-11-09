@@ -7,12 +7,49 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from src.common import metadata_pb2, metadata_pb2_grpc
+from src.common.path_utils import InvalidPath, normalize_path
 from src.metadata.database import SessionLocal
 from src.metadata.models import Block, BlockReplica, Entry, StorageNode, User
 from src.metadata.repository import initialize_database
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_BLOCK_SIZE = 4 * 1024 * 1024
+
+
+def _root_entry_response():
+    return metadata_pb2.EntryResponse(
+        success=True,
+        entry_id="",
+        name="/",
+        type="DIRECTORY",
+        size=0,
+        checksum="",
+        version=0,
+        message="Root directory",
+    )
+
+
+def _entry_response(entry, message):
+    return metadata_pb2.EntryResponse(
+        success=True,
+        entry_id=str(entry.id),
+        name=entry.name,
+        type=entry.type,
+        size=entry.size,
+        checksum=entry.checksum or "",
+        version=entry.version,
+        message=message,
+    )
+
+
+def _get_child(session, owner_id, parent_id, name):
+    return session.scalar(
+        select(Entry).where(
+            Entry.owner_id == owner_id,
+            Entry.parent_id == parent_id,
+            Entry.name == name,
+        )
+    )
 
 
 class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
@@ -557,6 +594,130 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             return metadata_pb2.OperationResponse(
                 success=True, message="Upload validated"
             )
+
+    def ResolvePath(self, request, context):
+
+        try:
+            normalized = normalize_path(request.path)
+        except InvalidPath as error:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+
+        with SessionLocal() as session:
+            if not session.get(User, request.owner_id):
+                context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
+
+            if normalized == "/":
+                return _root_entry_response()
+
+            parent_id = None
+            entry = None
+
+            components = normalized.strip("/").split("/")
+
+            for index, name in enumerate(components):
+                entry = _get_child(session, request.owner_id, parent_id, name)
+
+                if not entry:
+                    context.abort(
+                        grpc.StatusCode.NOT_FOUND,
+                        f"Path not found: {normalized}",
+                    )
+
+                if index < len(components) - 1 and entry.type != "DIRECTORY":
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        f"Not a directory: {normalized}",
+                    )
+
+                parent_id = entry.id
+
+            return _entry_response(entry, "Path resolved")
+
+    def MkdirPath(self, request, context):
+
+        try:
+            normalized = normalize_path(request.path)
+        except InvalidPath as error:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+
+        if normalized == "/":
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Cannot create the root directory",
+            )
+
+        with SessionLocal() as session:
+            if not session.get(User, request.owner_id):
+                context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
+
+            components = normalized.strip("/").split("/")
+
+            parent_id = None
+            last_entry = None
+
+            try:
+                for index, name in enumerate(components):
+                    existing = _get_child(
+                        session, request.owner_id, parent_id, name
+                    )
+                    is_last = index == len(components) - 1
+
+                    if existing:
+                        if existing.type != "DIRECTORY":
+                            if is_last:
+                                context.abort(
+                                    grpc.StatusCode.ALREADY_EXISTS,
+                                    "Entry already exists",
+                                )
+
+                            context.abort(
+                                grpc.StatusCode.FAILED_PRECONDITION,
+                                f"Not a directory: {normalized}",
+                            )
+
+                        if is_last:
+                            if not request.create_parents:
+                                context.abort(
+                                    grpc.StatusCode.ALREADY_EXISTS,
+                                    "Directory already exists",
+                                )
+
+                            return _entry_response(
+                                existing, "Directory already exists"
+                            )
+
+                        parent_id = existing.id
+                        continue
+
+                    if not is_last and not request.create_parents:
+                        context.abort(
+                            grpc.StatusCode.NOT_FOUND,
+                            "Parent directory not found",
+                        )
+
+                    entry = Entry(
+                        owner_id=request.owner_id,
+                        parent_id=parent_id,
+                        name=name,
+                        type="DIRECTORY",
+                    )
+
+                    session.add(entry)
+                    session.flush()
+
+                    parent_id = entry.id
+                    last_entry = entry
+
+                session.commit()
+
+                return _entry_response(last_entry, "Directory created")
+
+            except IntegrityError:
+                session.rollback()
+
+                context.abort(
+                    grpc.StatusCode.ALREADY_EXISTS, "Directory already exists"
+                )
 
 
 def serve():

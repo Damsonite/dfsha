@@ -84,6 +84,16 @@ class MetadataServiceStub:
                 request_serializer=metadata__pb2.PrepareUploadRequest.SerializeToString,
                 response_deserializer=metadata__pb2.OperationResponse.FromString,
                 _registered_method=True)
+        self.ResolvePath = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/ResolvePath',
+                request_serializer=metadata__pb2.ResolvePathRequest.SerializeToString,
+                response_deserializer=metadata__pb2.EntryResponse.FromString,
+                _registered_method=True)
+        self.MkdirPath = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/MkdirPath',
+                request_serializer=metadata__pb2.MkdirPathRequest.SerializeToString,
+                response_deserializer=metadata__pb2.EntryResponse.FromString,
+                _registered_method=True)
 
 
 class MetadataServiceServicer:
@@ -149,6 +159,18 @@ class MetadataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ResolvePath(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def MkdirPath(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MetadataServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -201,6 +223,16 @@ def add_MetadataServiceServicer_to_server(servicer, server):
                     servicer.PrepareUpload,
                     request_deserializer=metadata__pb2.PrepareUploadRequest.FromString,
                     response_serializer=metadata__pb2.OperationResponse.SerializeToString,
+            ),
+            'ResolvePath': grpc.unary_unary_rpc_method_handler(
+                    servicer.ResolvePath,
+                    request_deserializer=metadata__pb2.ResolvePathRequest.FromString,
+                    response_serializer=metadata__pb2.EntryResponse.SerializeToString,
+            ),
+            'MkdirPath': grpc.unary_unary_rpc_method_handler(
+                    servicer.MkdirPath,
+                    request_deserializer=metadata__pb2.MkdirPathRequest.FromString,
+                    response_serializer=metadata__pb2.EntryResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -473,6 +505,60 @@ class MetadataService:
             '/dfsha.metadata.MetadataService/PrepareUpload',
             metadata__pb2.PrepareUploadRequest.SerializeToString,
             metadata__pb2.OperationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ResolvePath(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/ResolvePath',
+            metadata__pb2.ResolvePathRequest.SerializeToString,
+            metadata__pb2.EntryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MkdirPath(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/MkdirPath',
+            metadata__pb2.MkdirPathRequest.SerializeToString,
+            metadata__pb2.EntryResponse.FromString,
             options,
             channel_credentials,
             insecure,

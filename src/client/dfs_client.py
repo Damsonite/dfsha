@@ -10,6 +10,11 @@ from src.common import (
     metadata_pb2,
     metadata_pb2_grpc,
 )
+from src.common.path_utils import (
+    InvalidPath,
+    normalize_path,
+    split_parent,
+)
 
 CHUNK_SIZE = 1024 * 1024
 DEFAULT_DATA_ENDPOINT = os.getenv("DATA_ENDPOINT", "localhost:50052")
@@ -73,18 +78,65 @@ class DFSClient:
             timeout=30,
         )
 
-    def upload(self, path, owner_id, parent_id=""):
+    def resolve_path(self, path, owner_id):
+
+        return self.metadata_stub.ResolvePath(
+            metadata_pb2.ResolvePathRequest(
+                owner_id=owner_id,
+                path=path,
+            ),
+            timeout=30,
+        )
+
+    def mkdir_path(self, path, owner_id, create_parents=False):
+
+        return self.metadata_stub.MkdirPath(
+            metadata_pb2.MkdirPathRequest(
+                owner_id=owner_id,
+                path=path,
+                create_parents=create_parents,
+            ),
+            timeout=30,
+        )
+
+    def stat_path(self, path, owner_id):
+
+        return self.resolve_path(path, owner_id)
+
+    def list_dir_path(self, path, owner_id):
+
+        entry = self.resolve_path(path, owner_id)
+
+        if entry.type != "DIRECTORY":
+            raise NotADirectoryError(f"Not a directory: {path}")
+
+        return self.list_dir(owner_id, entry.entry_id)
+
+    def remove_path(self, path, owner_id):
+
+        entry = self.resolve_path(path, owner_id)
+
+        if not entry.entry_id:
+            raise InvalidPath("Cannot remove the root directory")
+
+        return self.remove(entry.entry_id, owner_id)
+
+    def upload(self, path, owner_id, parent_id="", filename=None):
 
         path = Path(path)
 
         if not path.is_file():
             raise FileNotFoundError(path)
 
+        remote_filename = filename or path.name
+
         def requests():
 
             yield data_pb2.UploadFileRequest(
                 header=data_pb2.UploadHeader(
-                    owner_id=owner_id, parent_id=parent_id, filename=path.name
+                    owner_id=owner_id,
+                    parent_id=parent_id,
+                    filename=remote_filename,
                 )
             )
 
@@ -102,6 +154,45 @@ class DFSClient:
         response = self.stub.UploadFile(requests(), timeout=300)
 
         return response
+
+    def upload_path(self, local_path, remote_path, owner_id):
+
+        local_path = Path(local_path)
+
+        if not local_path.is_file():
+            raise FileNotFoundError(local_path)
+
+        remote_path = str(remote_path)
+        normalized = normalize_path(remote_path)
+
+        target_is_directory = remote_path.endswith("/") or normalized == "/"
+
+        if not target_is_directory:
+            try:
+                resolved = self.resolve_path(remote_path, owner_id)
+            except grpc.RpcError as error:
+                if error.code() != grpc.StatusCode.NOT_FOUND:
+                    raise
+            else:
+                target_is_directory = resolved.type == "DIRECTORY"
+
+        if target_is_directory:
+            parent_path = normalized
+            filename = local_path.name
+        else:
+            parent_path, filename = split_parent(remote_path)
+
+        parent = self.resolve_path(parent_path, owner_id)
+
+        if parent.type != "DIRECTORY":
+            raise NotADirectoryError(f"Not a directory: {parent_path}")
+
+        return self.upload(
+            local_path,
+            owner_id,
+            parent.entry_id,
+            filename=filename,
+        )
 
     def download(self, file_id, owner_id, destination):
 
@@ -178,6 +269,15 @@ class DFSClient:
         except Exception:
             temp_path.unlink(missing_ok=True)
             raise
+
+    def download_path(self, remote_path, owner_id, destination):
+
+        entry = self.resolve_path(remote_path, owner_id)
+
+        if entry.type != "FILE":
+            raise DownloadIntegrityError(f"Not a file: {remote_path}")
+
+        return self.download(entry.entry_id, owner_id, destination)
 
     def remove(self, entry_id, owner_id):
 

@@ -22,12 +22,27 @@ service MetadataService {
   rpc CommitFile(CommitFileRequest) returns (EntryResponse);
 
   rpc PrepareUpload(PrepareUploadRequest) returns (OperationResponse);
+
+  rpc ResolvePath(ResolvePathRequest) returns (EntryResponse);
+
+  rpc MkdirPath(MkdirPathRequest) returns (EntryResponse);
 }
 
 message PrepareUploadRequest {
   string owner_id = 1;
   string parent_id = 2;
   string name = 3;
+}
+
+message ResolvePathRequest {
+  string owner_id = 1;
+  string path = 2;
+}
+
+message MkdirPathRequest {
+  string owner_id = 1;
+  string path = 2;
+  bool create_parents = 3;
 }
 
 message MkdirRequest {
