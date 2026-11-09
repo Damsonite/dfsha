@@ -3,7 +3,7 @@ import sys
 
 import grpc
 
-from src.client.dfs_client import DFSClient
+from src.client.dfs_client import DFSClient, DownloadIntegrityError
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
         )
         sys.exit(1)
 
-    except OSError as error:
+    except (OSError, DownloadIntegrityError) as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
 

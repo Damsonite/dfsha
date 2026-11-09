@@ -40,6 +40,15 @@ class UploadRejected(Exception):
         self.cleanup = cleanup
 
 
+class DownloadRejected(Exception):
+    """Internal control-flow exception for a rejected streaming download."""
+
+    def __init__(self, code, details):
+        super().__init__(details)
+        self.code = code
+        self.details = details
+
+
 class DataServicer(data_pb2_grpc.DataServiceServicer):
     def __init__(self):
 
@@ -342,6 +351,29 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
     def DownloadFile(self, request, context):
 
         try:
+            metadata = self.metadata.Stat(
+                metadata_pb2.StatRequest(
+                    owner_id=request.owner_id, entry_id=request.file_id
+                ),
+                timeout=15,
+            )
+
+            if metadata.type != "FILE":
+                raise DownloadRejected(
+                    grpc.StatusCode.FAILED_PRECONDITION, "Entry is not a file"
+                )
+
+            if metadata.size < 0:
+                raise DownloadRejected(
+                    grpc.StatusCode.DATA_LOSS, "Invalid file size in metadata"
+                )
+
+            if len(metadata.checksum) != 64:
+                raise DownloadRejected(
+                    grpc.StatusCode.DATA_LOSS,
+                    "File checksum is missing or invalid",
+                )
+
             locations = self.metadata.LocateBlocks(
                 metadata_pb2.LocateBlocksRequest(
                     owner_id=request.owner_id, file_id=request.file_id
@@ -349,50 +381,160 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 timeout=15,
             )
 
-            for block in locations.blocks:
-                recovered = False
+            blocks = list(locations.blocks)
 
-                for endpoint in block.node_endpoints:
-                    try:
-                        channel = grpc.insecure_channel(
-                            endpoint, options=GRPC_CHANNEL_OPTIONS
-                        )
-
-                        stub = storage_pb2_grpc.StorageNodeStub(channel)
-
-                        response = stub.ReadBlock(
-                            storage_pb2.ReadBlockRequest(block_id=block.block_id),
-                            timeout=15,
-                        )
-
-                        channel.close()
-
-                        if not response.success:
-                            continue
-
-                        calculated = hashlib.sha256(response.data).hexdigest()
-
-                        if calculated != block.checksum:
-                            continue
-
-                        yield data_pb2.DownloadFileResponse(
-                            block_index=block.block_index, data=response.data
-                        )
-
-                        recovered = True
-                        break
-
-                    except grpc.RpcError:
-                        continue
-
-                if not recovered:
-                    context.abort(
-                        grpc.StatusCode.DATA_LOSS,
-                        f"No valid replica for block {block.block_id}",
+            if metadata.size == 0:
+                if blocks:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS, "Empty file has blocks"
                     )
+
+                if metadata.checksum != hashlib.sha256(b"").hexdigest():
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        "Empty file checksum does not match metadata",
+                    )
+
+                return
+
+            if not blocks:
+                raise DownloadRejected(
+                    grpc.StatusCode.DATA_LOSS, "File has no blocks"
+                )
+
+            expected_index = 0
+            expected_offset = 0
+            total_size = 0
+            file_hash = hashlib.sha256()
+
+            for block in blocks:
+                if block.block_index != expected_index:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Unexpected block index {block.block_index}, "
+                        f"expected {expected_index}",
+                    )
+
+                if block.offset != expected_offset:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Invalid block offset {block.offset}, "
+                        f"expected {expected_offset}",
+                    )
+
+                if block.size <= 0 or block.size > BLOCK_SIZE:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Invalid block size {block.size}",
+                    )
+
+                if not block.node_endpoints:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Block {block.block_id} has no ready replicas",
+                    )
+
+                data, failures = self._read_block(block)
+
+                if data is None:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"No valid replica for block {block.block_id}: {failures}",
+                    )
+
+                if len(data) != block.size:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Block {block.block_id} has {len(data)} bytes, "
+                        f"expected {block.size}",
+                    )
+
+                if hashlib.sha256(data).hexdigest() != block.checksum:
+                    raise DownloadRejected(
+                        grpc.StatusCode.DATA_LOSS,
+                        f"Block {block.block_id} checksum mismatch",
+                    )
+
+                file_hash.update(data)
+                total_size += len(data)
+                expected_offset += block.size
+                expected_index += 1
+
+                yield data_pb2.DownloadFileResponse(
+                    block_index=block.block_index, data=data
+                )
+
+            if total_size != metadata.size:
+                raise DownloadRejected(
+                    grpc.StatusCode.DATA_LOSS,
+                    f"Downloaded {total_size} bytes, expected {metadata.size}",
+                )
+
+            if file_hash.hexdigest() != metadata.checksum:
+                raise DownloadRejected(
+                    grpc.StatusCode.DATA_LOSS,
+                    "File checksum mismatch after download",
+                )
+
+        except DownloadRejected as error:
+            context.abort(error.code, error.details)
 
         except grpc.RpcError as error:
             context.abort(error.code(), error.details())
+
+    def _read_block(self, block):
+
+        failures = []
+
+        for endpoint in block.node_endpoints:
+            channel = grpc.insecure_channel(
+                endpoint, options=GRPC_CHANNEL_OPTIONS
+            )
+
+            try:
+                stub = storage_pb2_grpc.StorageNodeStub(channel)
+
+                response = stub.ReadBlock(
+                    storage_pb2.ReadBlockRequest(block_id=block.block_id),
+                    timeout=15,
+                )
+            except grpc.RpcError as error:
+                failures.append(
+                    f"{endpoint}: {error.code().name}: {error.details()}"
+                )
+                continue
+            finally:
+                channel.close()
+
+            if not response.success:
+                failures.append(f"{endpoint}: rejected: {response.message}")
+                continue
+
+            if response.block_id != block.block_id:
+                failures.append(
+                    f"{endpoint}: returned block {response.block_id}, "
+                    f"expected {block.block_id}"
+                )
+                continue
+
+            if response.checksum != block.checksum:
+                failures.append(f"{endpoint}: checksum metadata mismatch")
+                continue
+
+            if len(response.data) != block.size:
+                failures.append(
+                    f"{endpoint}: returned {len(response.data)} bytes, "
+                    f"expected {block.size}"
+                )
+                continue
+
+            if hashlib.sha256(response.data).hexdigest() != block.checksum:
+                failures.append(f"{endpoint}: data checksum mismatch")
+                continue
+
+            return response.data, failures
+
+        return None, failures
 
     def Health(self, request, context):
 
