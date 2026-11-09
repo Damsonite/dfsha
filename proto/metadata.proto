@@ -18,6 +18,8 @@ service MetadataService {
   rpc RegisterNode(RegisterNodeRequest) returns (OperationResponse);
 
   rpc Health(HealthRequest) returns (HealthResponse);
+
+  rpc CommitFile(CommitFileRequest) returns (EntryResponse);
 }
 
 message MkdirRequest {
@@ -105,4 +107,23 @@ message HealthRequest {}
 
 message HealthResponse {
   string status = 1;
+}
+
+message CommittedBlock {
+  string block_id = 1;
+  int32 block_index = 2;
+  int64 offset = 3;
+  int32 size = 4;
+  string checksum = 5;
+  int32 version = 6;
+  repeated string node_ids = 7;
+}
+
+message CommitFileRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+  string name = 3;
+  int64 size = 4;
+  string checksum = 5;
+  repeated CommittedBlock blocks = 6;
 }

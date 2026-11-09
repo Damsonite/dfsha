@@ -309,6 +309,154 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
         return metadata_pb2.HealthResponse(status="HEALTHY")
 
+    def CommitFile(self, request, context):
+
+        with SessionLocal() as session:
+            user = session.get(User, request.owner_id)
+
+            if not user:
+                context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
+
+            parent_id = None
+
+            if request.parent_id:
+                try:
+                    parent_id = UUID(request.parent_id)
+                except ValueError:
+                    context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid parent ID")
+
+                parent = session.get(Entry, parent_id)
+
+                if (
+                    not parent
+                    or parent.owner_id != request.owner_id
+                    or parent.type != "DIRECTORY"
+                ):
+                    context.abort(
+                        grpc.StatusCode.NOT_FOUND, "Parent directory not found"
+                    )
+
+            existing = session.scalar(
+                select(Entry).where(
+                    Entry.owner_id == request.owner_id,
+                    Entry.parent_id == parent_id,
+                    Entry.name == request.name,
+                )
+            )
+
+            if existing:
+                context.abort(grpc.StatusCode.ALREADY_EXISTS, "Entry already exists")
+
+            if not request.name or "/" in request.name:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename")
+
+            if request.size < 0:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid file size")
+
+            if request.size == 0 and len(request.blocks) != 0:
+                context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT,
+                    "Empty files cannot contain blocks",
+                )
+
+            if request.size > 0 and not request.blocks:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "File has no blocks")
+
+            ordered_blocks = sorted(request.blocks, key=lambda block: block.block_index)
+
+            expected_offset = 0
+
+            for index, block in enumerate(ordered_blocks):
+                if block.block_index != index:
+                    context.abort(
+                        grpc.StatusCode.INVALID_ARGUMENT, "Invalid block sequence"
+                    )
+
+                if block.offset != expected_offset or block.size <= 0:
+                    context.abort(
+                        grpc.StatusCode.INVALID_ARGUMENT, "Invalid block layout"
+                    )
+
+                if not block.node_ids:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION, "Block has no replicas"
+                    )
+
+                if len(set(block.node_ids)) < 2:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "Block has fewer than two replicas",
+                    )
+
+                expected_offset += block.size
+
+            if expected_offset != request.size:
+                context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT,
+                    "Block sizes do not match file size",
+                )
+
+            try:
+                entry = Entry(
+                    owner_id=request.owner_id,
+                    parent_id=parent_id,
+                    name=request.name,
+                    type="FILE",
+                    size=request.size,
+                    checksum=request.checksum,
+                )
+
+                session.add(entry)
+                session.flush()
+
+                for block_data in ordered_blocks:
+                    block_id = UUID(block_data.block_id)
+
+                    block = Block(
+                        id=block_id,
+                        file_id=entry.id,
+                        block_index=block_data.block_index,
+                        offset=block_data.offset,
+                        size=block_data.size,
+                        checksum=block_data.checksum,
+                        version=block_data.version,
+                    )
+
+                    session.add(block)
+
+                    for node_id in block_data.node_ids:
+                        node = session.get(StorageNode, node_id)
+
+                        if not node:
+                            raise ValueError(f"Unknown storage node: {node_id}")
+
+                        session.add(
+                            BlockReplica(
+                                block_id=block_id,
+                                node_id=node_id,
+                                state="READY",
+                                version=block_data.version,
+                            )
+                        )
+
+                session.commit()
+
+                return metadata_pb2.EntryResponse(
+                    success=True,
+                    entry_id=str(entry.id),
+                    name=entry.name,
+                    type=entry.type,
+                    size=entry.size,
+                    checksum=entry.checksum,
+                    version=entry.version,
+                    message="File committed successfully",
+                )
+
+            except Exception as error:
+                session.rollback()
+
+                context.abort(grpc.StatusCode.INTERNAL, str(error))
+
 
 def serve():
 

@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package dfsha.data;
+
+service DataService {
+  rpc UploadFile(stream UploadFileRequest) returns (UploadFileResponse);
+
+  rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileResponse);
+
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message UploadHeader {
+  string owner_id = 1;
+  string parent_id = 2;
+  string filename = 3;
+}
+
+message UploadChunk {
+  bytes data = 1;
+}
+
+message UploadFileRequest {
+  oneof payload {
+    UploadHeader header = 1;
+    UploadChunk chunk = 2;
+  }
+}
+
+message UploadFileResponse {
+  bool success = 1;
+  string file_id = 2;
+  string filename = 3;
+  int64 size = 4;
+  string checksum = 5;
+  int32 block_count = 6;
+  string message = 7;
+}
+
+message DownloadFileRequest {
+  string owner_id = 1;
+  string file_id = 2;
+}
+
+message DownloadFileResponse {
+  int32 block_index = 1;
+  bytes data = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

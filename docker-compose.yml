@@ -49,6 +49,27 @@ services:
     networks:
       - dfsha_network
 
+  data:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dfsha-data
+    restart: unless-stopped
+
+    command: ["python", "-m", "src.data.server"]
+
+    depends_on:
+      - metadata
+      - storage-1
+      - storage-2
+      - storage-3
+
+    ports:
+      - "50052:50052"
+
+    networks:
+      - dfsha_network
+
   storage-1:
     build:
       context: .

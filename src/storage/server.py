@@ -107,7 +107,13 @@ def serve():
 
     port = os.getenv("GRPC_PORT", "50061")
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        options=[
+            ("grpc.max_receive_message_length", 5 * 1024 * 1024),
+            ("grpc.max_send_message_length", 5 * 1024 * 1024),
+        ],
+    )
 
     storage_pb2_grpc.add_StorageNodeServicer_to_server(StorageNodeServicer(), server)
 

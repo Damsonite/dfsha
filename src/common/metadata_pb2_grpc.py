@@ -74,6 +74,11 @@ class MetadataServiceStub:
                 request_serializer=metadata__pb2.HealthRequest.SerializeToString,
                 response_deserializer=metadata__pb2.HealthResponse.FromString,
                 _registered_method=True)
+        self.CommitFile = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/CommitFile',
+                request_serializer=metadata__pb2.CommitFileRequest.SerializeToString,
+                response_deserializer=metadata__pb2.EntryResponse.FromString,
+                _registered_method=True)
 
 
 class MetadataServiceServicer:
@@ -127,6 +132,12 @@ class MetadataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CommitFile(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MetadataServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -169,6 +180,11 @@ def add_MetadataServiceServicer_to_server(servicer, server):
                     servicer.Health,
                     request_deserializer=metadata__pb2.HealthRequest.FromString,
                     response_serializer=metadata__pb2.HealthResponse.SerializeToString,
+            ),
+            'CommitFile': grpc.unary_unary_rpc_method_handler(
+                    servicer.CommitFile,
+                    request_deserializer=metadata__pb2.CommitFileRequest.FromString,
+                    response_serializer=metadata__pb2.EntryResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -387,6 +403,33 @@ class MetadataService:
             '/dfsha.metadata.MetadataService/Health',
             metadata__pb2.HealthRequest.SerializeToString,
             metadata__pb2.HealthResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CommitFile(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/CommitFile',
+            metadata__pb2.CommitFileRequest.SerializeToString,
+            metadata__pb2.EntryResponse.FromString,
             options,
             channel_credentials,
             insecure,
