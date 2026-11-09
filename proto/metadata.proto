@@ -26,6 +26,12 @@ service MetadataService {
   rpc ResolvePath(ResolvePathRequest) returns (EntryResponse);
 
   rpc MkdirPath(MkdirPathRequest) returns (EntryResponse);
+
+  rpc AcquireUploadLease(AcquireUploadLeaseRequest) returns (UploadLeaseResponse);
+
+  rpc RenewUploadLease(RenewUploadLeaseRequest) returns (UploadLeaseResponse);
+
+  rpc ReleaseUploadLease(ReleaseUploadLeaseRequest) returns (OperationResponse);
 }
 
 message PrepareUploadRequest {
@@ -43,6 +49,31 @@ message MkdirPathRequest {
   string owner_id = 1;
   string path = 2;
   bool create_parents = 3;
+}
+
+message AcquireUploadLeaseRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+  string name = 3;
+  int32 ttl_seconds = 4;
+}
+
+message RenewUploadLeaseRequest {
+  string owner_id = 1;
+  string lease_id = 2;
+  int32 ttl_seconds = 3;
+}
+
+message ReleaseUploadLeaseRequest {
+  string owner_id = 1;
+  string lease_id = 2;
+}
+
+message UploadLeaseResponse {
+  bool success = 1;
+  string lease_id = 2;
+  int64 expires_at = 3;
+  string message = 4;
 }
 
 message MkdirRequest {
@@ -149,4 +180,5 @@ message CommitFileRequest {
   int64 size = 4;
   string checksum = 5;
   repeated CommittedBlock blocks = 6;
+  string lease_id = 7;
 }

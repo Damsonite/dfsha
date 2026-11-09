@@ -68,6 +68,45 @@ class Entry(Base):
     )
 
 
+class UploadLease(Base):
+    __tablename__ = "upload_leases"
+
+    __table_args__ = (
+        Index(
+            "uq_upload_lease_namespace",
+            text("owner_id"),
+            text("COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            text("name"),
+            unique=True,
+        ),
+        Index("ix_upload_lease_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entries.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class StorageNode(Base):
     __tablename__ = "storage_nodes"
 

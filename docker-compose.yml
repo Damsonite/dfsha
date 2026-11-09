@@ -60,6 +60,7 @@ services:
 
     environment:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
+      UPLOAD_LEASE_TTL_SECONDS: ${UPLOAD_LEASE_TTL_SECONDS:-300}
 
     depends_on:
       - metadata

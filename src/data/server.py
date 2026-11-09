@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+import time
 import uuid
 from concurrent import futures
 
@@ -21,6 +22,7 @@ REPLICATION_FACTOR = 3
 WRITE_QUORUM = 2
 MAX_FILENAME_LENGTH = 255
 DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+DEFAULT_LEASE_TTL_SECONDS = 300
 
 GRPC_CHANNEL_OPTIONS = [
     ("grpc.max_receive_message_length", 5 * 1024 * 1024),
@@ -76,22 +78,28 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         self.ring = ConsistentHash(list(self.nodes.keys()), virtual_nodes=150)
 
-        self.max_upload_bytes = self._read_max_upload_bytes()
+        self.max_upload_bytes = self._read_positive_int_env(
+            "MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES
+        )
+
+        self.upload_lease_ttl_seconds = self._read_positive_int_env(
+            "UPLOAD_LEASE_TTL_SECONDS", DEFAULT_LEASE_TTL_SECONDS
+        )
 
     @staticmethod
-    def _read_max_upload_bytes():
-        raw_value = os.getenv("MAX_UPLOAD_BYTES", str(DEFAULT_MAX_UPLOAD_BYTES))
+    def _read_positive_int_env(name, default):
+        raw_value = os.getenv(name, str(default))
 
         try:
             value = int(raw_value)
         except ValueError as error:
             raise RuntimeError(
-                f"Invalid MAX_UPLOAD_BYTES={raw_value!r}: must be an integer"
+                f"Invalid {name}={raw_value!r}: must be an integer"
             ) from error
 
         if value <= 0:
             raise RuntimeError(
-                f"Invalid MAX_UPLOAD_BYTES={raw_value!r}: must be greater than zero"
+                f"Invalid {name}={raw_value!r}: must be greater than zero"
             )
 
         return value
@@ -102,6 +110,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         buffer = bytearray()
         blocks = []
         written_blocks = []
+        lease_id = None
 
         file_id = str(uuid.uuid4())
 
@@ -123,7 +132,10 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     header = request.header
 
                     self._validate_upload_header(header)
-                    self._prepare_upload(header)
+                    lease_id = self._acquire_lease(header)
+                    lease_renew_at = time.monotonic() + max(
+                        1.0, self.upload_lease_ttl_seconds / 2
+                    )
 
                     continue
 
@@ -165,6 +177,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
                     block_index += 1
 
+                    if time.monotonic() >= lease_renew_at:
+                        self._renew_lease(lease_id, header.owner_id)
+                        lease_renew_at = time.monotonic() + max(
+                            1.0, self.upload_lease_ttl_seconds / 2
+                        )
+
             if header is None:
                 raise UploadRejected(
                     grpc.StatusCode.INVALID_ARGUMENT, "Missing upload header"
@@ -179,6 +197,8 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
             checksum = file_hash.hexdigest()
 
+            self._renew_lease(lease_id, header.owner_id)
+
             try:
                 commit = self.metadata.CommitFile(
                     metadata_pb2.CommitFileRequest(
@@ -188,6 +208,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                         size=total_size,
                         checksum=checksum,
                         blocks=blocks,
+                        lease_id=lease_id,
                     ),
                     timeout=30,
                 )
@@ -212,6 +233,8 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     commit.message or "File commit failed",
                 )
 
+            lease_id = None
+
             return data_pb2.UploadFileResponse(
                 success=True,
                 file_id=commit.entry_id,
@@ -231,15 +254,24 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     len(written_blocks),
                 )
 
+            if lease_id:
+                self._release_lease(lease_id, header.owner_id)
+
             context.abort(error.code, error.details)
 
         except grpc.RpcError as error:
             self._cleanup_blocks(written_blocks)
 
+            if lease_id:
+                self._release_lease(lease_id, header.owner_id)
+
             context.abort(error.code(), error.details())
 
         except Exception as error:
             self._cleanup_blocks(written_blocks)
+
+            if lease_id:
+                self._release_lease(lease_id, header.owner_id)
 
             context.abort(grpc.StatusCode.INTERNAL, f"Upload failed: {error}")
 
@@ -264,14 +296,15 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename"
             )
 
-    def _prepare_upload(self, header):
+    def _acquire_lease(self, header):
 
         try:
-            response = self.metadata.PrepareUpload(
-                metadata_pb2.PrepareUploadRequest(
+            response = self.metadata.AcquireUploadLease(
+                metadata_pb2.AcquireUploadLeaseRequest(
                     owner_id=header.owner_id,
                     parent_id=header.parent_id,
                     name=header.filename,
+                    ttl_seconds=self.upload_lease_ttl_seconds,
                 ),
                 timeout=15,
             )
@@ -281,7 +314,46 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         if not response.success:
             raise UploadRejected(
                 grpc.StatusCode.FAILED_PRECONDITION,
-                response.message or "Upload validation failed",
+                response.message or "Upload lease acquisition failed",
+            )
+
+        return response.lease_id
+
+    def _renew_lease(self, lease_id, owner_id):
+
+        try:
+            response = self.metadata.RenewUploadLease(
+                metadata_pb2.RenewUploadLeaseRequest(
+                    owner_id=owner_id,
+                    lease_id=lease_id,
+                    ttl_seconds=self.upload_lease_ttl_seconds,
+                ),
+                timeout=15,
+            )
+        except grpc.RpcError as error:
+            raise UploadRejected(error.code(), error.details()) from error
+
+        if not response.success:
+            raise UploadRejected(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                response.message or "Upload lease renewal failed",
+            )
+
+    def _release_lease(self, lease_id, owner_id):
+
+        try:
+            self.metadata.ReleaseUploadLease(
+                metadata_pb2.ReleaseUploadLeaseRequest(
+                    owner_id=owner_id,
+                    lease_id=lease_id,
+                ),
+                timeout=5,
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not release upload lease %s: %s",
+                lease_id,
+                error,
             )
 
     def _cleanup_blocks(self, written_blocks):

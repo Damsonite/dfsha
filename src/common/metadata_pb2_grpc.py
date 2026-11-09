@@ -94,6 +94,21 @@ class MetadataServiceStub:
                 request_serializer=metadata__pb2.MkdirPathRequest.SerializeToString,
                 response_deserializer=metadata__pb2.EntryResponse.FromString,
                 _registered_method=True)
+        self.AcquireUploadLease = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/AcquireUploadLease',
+                request_serializer=metadata__pb2.AcquireUploadLeaseRequest.SerializeToString,
+                response_deserializer=metadata__pb2.UploadLeaseResponse.FromString,
+                _registered_method=True)
+        self.RenewUploadLease = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/RenewUploadLease',
+                request_serializer=metadata__pb2.RenewUploadLeaseRequest.SerializeToString,
+                response_deserializer=metadata__pb2.UploadLeaseResponse.FromString,
+                _registered_method=True)
+        self.ReleaseUploadLease = channel.unary_unary(
+                '/dfsha.metadata.MetadataService/ReleaseUploadLease',
+                request_serializer=metadata__pb2.ReleaseUploadLeaseRequest.SerializeToString,
+                response_deserializer=metadata__pb2.OperationResponse.FromString,
+                _registered_method=True)
 
 
 class MetadataServiceServicer:
@@ -171,6 +186,24 @@ class MetadataServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AcquireUploadLease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RenewUploadLease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReleaseUploadLease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MetadataServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -233,6 +266,21 @@ def add_MetadataServiceServicer_to_server(servicer, server):
                     servicer.MkdirPath,
                     request_deserializer=metadata__pb2.MkdirPathRequest.FromString,
                     response_serializer=metadata__pb2.EntryResponse.SerializeToString,
+            ),
+            'AcquireUploadLease': grpc.unary_unary_rpc_method_handler(
+                    servicer.AcquireUploadLease,
+                    request_deserializer=metadata__pb2.AcquireUploadLeaseRequest.FromString,
+                    response_serializer=metadata__pb2.UploadLeaseResponse.SerializeToString,
+            ),
+            'RenewUploadLease': grpc.unary_unary_rpc_method_handler(
+                    servicer.RenewUploadLease,
+                    request_deserializer=metadata__pb2.RenewUploadLeaseRequest.FromString,
+                    response_serializer=metadata__pb2.UploadLeaseResponse.SerializeToString,
+            ),
+            'ReleaseUploadLease': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReleaseUploadLease,
+                    request_deserializer=metadata__pb2.ReleaseUploadLeaseRequest.FromString,
+                    response_serializer=metadata__pb2.OperationResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -559,6 +607,87 @@ class MetadataService:
             '/dfsha.metadata.MetadataService/MkdirPath',
             metadata__pb2.MkdirPathRequest.SerializeToString,
             metadata__pb2.EntryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AcquireUploadLease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/AcquireUploadLease',
+            metadata__pb2.AcquireUploadLeaseRequest.SerializeToString,
+            metadata__pb2.UploadLeaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RenewUploadLease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/RenewUploadLease',
+            metadata__pb2.RenewUploadLeaseRequest.SerializeToString,
+            metadata__pb2.UploadLeaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReleaseUploadLease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfsha.metadata.MetadataService/ReleaseUploadLease',
+            metadata__pb2.ReleaseUploadLeaseRequest.SerializeToString,
+            metadata__pb2.OperationResponse.FromString,
             options,
             channel_credentials,
             insecure,

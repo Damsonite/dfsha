@@ -1,5 +1,6 @@
 import re
 from concurrent import futures
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import grpc
@@ -9,11 +10,32 @@ from sqlalchemy.exc import IntegrityError
 from src.common import metadata_pb2, metadata_pb2_grpc
 from src.common.path_utils import InvalidPath, normalize_path
 from src.metadata.database import SessionLocal
-from src.metadata.models import Block, BlockReplica, Entry, StorageNode, User
+from src.metadata.models import (
+    Block,
+    BlockReplica,
+    Entry,
+    StorageNode,
+    UploadLease,
+    User,
+)
 from src.metadata.repository import initialize_database
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_BLOCK_SIZE = 4 * 1024 * 1024
+DEFAULT_LEASE_TTL_SECONDS = 300
+MAX_LEASE_TTL_SECONDS = 3600
+
+
+def _lease_ttl(requested_ttl):
+    if requested_ttl <= 0:
+        return DEFAULT_LEASE_TTL_SECONDS
+
+    if requested_ttl > MAX_LEASE_TTL_SECONDS:
+        raise ValueError(
+            f"Lease TTL cannot exceed {MAX_LEASE_TTL_SECONDS} seconds"
+        )
+
+    return requested_ttl
 
 
 def _root_entry_response():
@@ -104,7 +126,15 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
             session.add(entry)
-            session.commit()
+
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+
+                context.abort(
+                    grpc.StatusCode.ALREADY_EXISTS, "Entry already exists"
+                )
 
             return metadata_pb2.EntryResponse(
                 success=True,
@@ -271,7 +301,15 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             )
 
             session.add(entry)
-            session.commit()
+
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+
+                context.abort(
+                    grpc.StatusCode.ALREADY_EXISTS, "Entry already exists"
+                )
 
             return metadata_pb2.EntryResponse(
                 success=True,
@@ -408,6 +446,41 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             ):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename")
 
+            if not request.lease_id:
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    "Upload lease is required",
+                )
+
+            try:
+                lease_id = UUID(request.lease_id)
+            except ValueError:
+                context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT, "Invalid upload lease ID"
+                )
+
+            lease = session.get(UploadLease, lease_id)
+
+            if (
+                not lease
+                or lease.owner_id != request.owner_id
+                or lease.parent_id != parent_id
+                or lease.name != request.name
+            ):
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    "Upload lease does not match target",
+                )
+
+            if lease.expires_at <= datetime.now(timezone.utc):
+                session.delete(lease)
+                session.commit()
+
+                context.abort(
+                    grpc.StatusCode.DEADLINE_EXCEEDED,
+                    "Upload lease expired",
+                )
+
             if request.size < 0:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid file size")
 
@@ -511,6 +584,7 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
                             )
                         )
 
+                session.delete(lease)
                 session.commit()
 
                 return metadata_pb2.EntryResponse(
@@ -593,6 +667,161 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
 
             return metadata_pb2.OperationResponse(
                 success=True, message="Upload validated"
+            )
+
+    def AcquireUploadLease(self, request, context):
+
+        try:
+            ttl_seconds = _lease_ttl(request.ttl_seconds)
+        except ValueError as error:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+
+        with SessionLocal() as session:
+            if not session.get(User, request.owner_id):
+                context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
+
+            parent_id = None
+
+            if request.parent_id:
+                try:
+                    parent_id = UUID(request.parent_id)
+                except ValueError:
+                    context.abort(
+                        grpc.StatusCode.INVALID_ARGUMENT, "Invalid parent ID"
+                    )
+
+                parent = session.get(Entry, parent_id)
+
+                if (
+                    not parent
+                    or parent.owner_id != request.owner_id
+                    or parent.type != "DIRECTORY"
+                ):
+                    context.abort(
+                        grpc.StatusCode.NOT_FOUND, "Parent directory not found"
+                    )
+
+            if (
+                not request.name
+                or len(request.name) > 255
+                or "/" in request.name
+                or "\x00" in request.name
+                or request.name in (".", "..")
+            ):
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename")
+
+            now = datetime.now(timezone.utc)
+
+            session.execute(
+                delete(UploadLease).where(UploadLease.expires_at <= now)
+            )
+
+            existing = _get_child(
+                session, request.owner_id, parent_id, request.name
+            )
+
+            if existing:
+                context.abort(grpc.StatusCode.ALREADY_EXISTS, "Entry already exists")
+
+            active_lease = session.scalar(
+                select(UploadLease).where(
+                    UploadLease.owner_id == request.owner_id,
+                    UploadLease.parent_id == parent_id,
+                    UploadLease.name == request.name,
+                )
+            )
+
+            if active_lease:
+                context.abort(
+                    grpc.StatusCode.ABORTED, "Upload already in progress"
+                )
+
+            lease = UploadLease(
+                owner_id=request.owner_id,
+                parent_id=parent_id,
+                name=request.name,
+                expires_at=now + timedelta(seconds=ttl_seconds),
+            )
+
+            session.add(lease)
+
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+
+                context.abort(
+                    grpc.StatusCode.ABORTED, "Upload already in progress"
+                )
+
+            return metadata_pb2.UploadLeaseResponse(
+                success=True,
+                lease_id=str(lease.id),
+                expires_at=int(lease.expires_at.timestamp()),
+                message="Upload lease acquired",
+            )
+
+    def RenewUploadLease(self, request, context):
+
+        try:
+            lease_id = UUID(request.lease_id)
+        except ValueError:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Invalid upload lease ID"
+            )
+
+        try:
+            ttl_seconds = _lease_ttl(request.ttl_seconds)
+        except ValueError as error:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+
+        with SessionLocal() as session:
+            lease = session.get(UploadLease, lease_id)
+
+            if not lease or lease.owner_id != request.owner_id:
+                context.abort(
+                    grpc.StatusCode.NOT_FOUND, "Upload lease not found"
+                )
+
+            now = datetime.now(timezone.utc)
+
+            if lease.expires_at <= now:
+                session.delete(lease)
+                session.commit()
+
+                context.abort(
+                    grpc.StatusCode.DEADLINE_EXCEEDED,
+                    "Upload lease expired",
+                )
+
+            lease.expires_at = now + timedelta(seconds=ttl_seconds)
+            session.commit()
+
+            return metadata_pb2.UploadLeaseResponse(
+                success=True,
+                lease_id=str(lease.id),
+                expires_at=int(lease.expires_at.timestamp()),
+                message="Upload lease renewed",
+            )
+
+    def ReleaseUploadLease(self, request, context):
+
+        try:
+            lease_id = UUID(request.lease_id)
+        except ValueError:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Invalid upload lease ID"
+            )
+
+        with SessionLocal() as session:
+            lease = session.get(UploadLease, lease_id)
+
+            if lease and lease.owner_id == request.owner_id:
+                session.delete(lease)
+                session.commit()
+
+            return metadata_pb2.OperationResponse(
+                success=True, message="Upload lease released"
             )
 
     def ResolvePath(self, request, context):

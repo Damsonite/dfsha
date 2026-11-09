@@ -1,7 +1,16 @@
-from sqlalchemy import text
+from datetime import datetime, timezone
+
+from sqlalchemy import delete, text
 
 from src.metadata.database import Base, SessionLocal, engine
-from src.metadata.models import Block, BlockReplica, Entry, StorageNode, User
+from src.metadata.models import (
+    Block,
+    BlockReplica,
+    Entry,
+    StorageNode,
+    UploadLease,
+    User,
+)
 
 
 def initialize_database():
@@ -29,5 +38,11 @@ def initialize_database():
 
             if not node:
                 session.add(StorageNode(id=node_id, endpoint=endpoint, status="ACTIVE"))
+
+        session.execute(
+            delete(UploadLease).where(
+                UploadLease.expires_at <= datetime.now(timezone.utc)
+            )
+        )
 
         session.commit()
