@@ -172,6 +172,8 @@ Comandos disponibles:
 | `ls [ruta]`                   | Lista un directorio. Sin ruta lista la raíz.                                                        |
 | `stat <ruta_o_id>`            | Muestra los metadatos de una entrada.                                                               |
 | `rm <ruta_o_id>`              | Elimina un archivo o un directorio vacío.                                                           |
+| `rmdir <ruta>`                | Elimina un directorio vacío; falla si no existe, no es un directorio o no está vacío.               |
+| `shell`                       | Abre un shell interactivo con `cd`, rutas relativas y las primitivas de acceso a archivos.          |
 
 Opciones comunes:
 
@@ -198,7 +200,7 @@ sha256sum ./descargas/test-large.bin
 
 # Eliminar
 python -m src.client.cli rm /documentos/facturas/test-large.bin
-python -m src.client.cli rm /documentos/facturas
+python -m src.client.cli rmdir /documentos/facturas
 ```
 
 Puedes cambiar el endpoint para un comando concreto:
@@ -214,6 +216,72 @@ El token y el usuario deben corresponder. Para operar como `user-002`:
 ```bash
 DFSHA_TOKEN=dev-second-token python -m src.client.cli ls / --user user-002
 ```
+
+### Shell interactivo y primitivas de acceso
+
+`python -m src.client.cli shell` abre un shell con un directorio de trabajo
+propio. Todos los comandos admiten rutas absolutas o relativas al directorio
+actual:
+
+```text
+dfsha> pwd
+/
+dfsha> mkdir -p /documentos/facturas
+dfsha> cd /documentos/facturas
+dfsha> pwd
+/documentos/facturas
+dfsha> put ./resumen.txt resumen.txt
+dfsha> ls
+dfsha> stat resumen.txt
+dfsha> rm resumen.txt
+dfsha> cd ..
+dfsha> rmdir facturas
+```
+
+El shell también expone las primitivas de acceso a archivos:
+
+| Comando                | Descripción                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `open <ruta> [r\|w]`    | Abre un handle de lectura o escritura.                                      |
+| `read [bytes]`         | Lee del handle; sin argumento lee hasta el final y verifica el checksum.    |
+| `write <texto>`        | Escribe texto en un handle abierto en modo `w`.                             |
+| `close`                | Cierra el handle; en modo `w` sube el archivo y confirma los metadatos.     |
+| `lock <ruta>`          | Reserva un nombre para escritura con un lease con expiración.               |
+| `unlock [lease_id]`    | Libera el último lock o el indicado.                                        |
+
+La misma API está disponible en Python mediante
+`DFSClient.open()`, `FileHandle.read()`, `FileHandle.write()`,
+`FileHandle.close()`, `DFSClient.lock()` y `DFSClient.unlock()`:
+
+```python
+from src.client.dfs_client import DFSClient
+
+client = DFSClient()
+
+with client.open("/documentos/nota.txt", "w", "user-001") as handle:
+    handle.write(b"primera linea\n")
+
+with client.open("/documentos/nota.txt", "r", "user-001") as handle:
+    print(handle.read().decode("utf-8"))
+
+lease_id = client.lock("/documentos/borrador.txt", "user-001")
+client.unlock(lease_id, "user-001")
+```
+
+#### Semántica de `open`/`read`/`write`/`lock`
+
+- `open(ruta, "r")` requiere que la entrada exista y sea un archivo. `read()`
+  valida el orden de los bloques, el tamaño y el SHA-256 al llegar al final.
+- `open(ruta, "w")` requiere una ruta nueva: `write()` admite **solo creación**.
+  El reemplazo de un archivo existente se rechaza con `ALREADY_EXISTS`
+  (`FileExistsError` en el cliente) y el **anexado no está soportado**.
+- `open(ruta, "w")` adquiere un lease de escritura al abrir y lo reutiliza al
+  cerrar. `lock()` permite reservar un nombre nuevo sin abrir un handle; sobre
+  una entrada existente falla con `ALREADY_EXISTS`. El lease es un bloqueo de
+  escritura consultivo con expiración (300 segundos por defecto); no es un
+  bloqueo de lectura ni un mecanismo para compartir archivos.
+- El espacio de nombres sigue separado por `owner_id`: ningún usuario puede
+  abrir, leer, escribir, bloquear o eliminar entradas de otro usuario.
 
 ### Tests
 
@@ -234,6 +302,7 @@ python -m scripts.test_upload_validation
 python -m scripts.test_download_validation
 python -m scripts.test_namespace_operations
 python -m scripts.test_path_operations
+python -m scripts.test_file_primitives
 python -m scripts.test_upload_leases
 python -m scripts.test_storage
 python -m scripts.test_storage_recovery

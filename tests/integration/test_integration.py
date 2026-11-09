@@ -3,6 +3,7 @@ import pytest
 from scripts import (
     test_auth as auth_script,
     test_download_validation as download_validation_script,
+    test_file_primitives as file_primitives_script,
     test_namespace_operations as namespace_script,
     test_path_operations as path_script,
     test_storage as storage_script,
@@ -28,6 +29,10 @@ def test_namespace_operations():
 
 def test_path_operations():
     path_script.main()
+
+
+def test_file_primitives():
+    file_primitives_script.main()
 
 
 def test_upload_leases():

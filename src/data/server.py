@@ -294,7 +294,15 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                         )
 
                     self._validate_upload_header(header)
-                    lease_id = self._acquire_lease(header, token)
+
+                    if header.lease_id:
+                        lease_id = header.lease_id
+                        self._renew_lease(
+                            lease_id, header.owner_id, token
+                        )
+                    else:
+                        lease_id = self._acquire_lease(header, token)
+
                     lease_renew_at = time.monotonic() + max(
                         1.0, self.upload_lease_ttl_seconds / 2
                     )

@@ -40,6 +40,18 @@ def normalize_path(path):
     return "/" + "/".join(components)
 
 
+def join_path(cwd, path):
+    if not path:
+        return normalize_path(cwd)
+
+    if path.startswith("/"):
+        return normalize_path(path)
+
+    base = normalize_path(cwd).rstrip("/")
+
+    return normalize_path(f"{base}/{path}")
+
+
 def split_parent(path):
     normalized = normalize_path(path)
 

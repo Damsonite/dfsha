@@ -18,6 +18,7 @@ message UploadHeader {
   string owner_id = 1;
   string parent_id = 2;
   string filename = 3;
+  string lease_id = 4;
 }
 
 message UploadChunk {

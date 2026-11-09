@@ -1,6 +1,8 @@
 import hashlib
 import os
+import tempfile
 from pathlib import Path
+from uuid import UUID
 
 import grpc
 
@@ -22,8 +24,163 @@ DEFAULT_DATA_ENDPOINT = os.getenv("DATA_ENDPOINT", "localhost:50052")
 DEFAULT_METADATA_ENDPOINT = os.getenv("METADATA_ENDPOINT", "localhost:50051")
 
 
+def _is_uuid(value):
+    try:
+        UUID(str(value))
+    except (AttributeError, ValueError):
+        return False
+
+    return True
+
+
 class DownloadIntegrityError(Exception):
     pass
+
+
+class FileHandle:
+    def __init__(
+        self,
+        client,
+        owner_id,
+        mode,
+        entry=None,
+        path=None,
+        parent_id=None,
+        filename=None,
+        lease_id=None,
+    ):
+        self.client = client
+        self.owner_id = owner_id
+        self.mode = mode
+        self.entry = entry
+        self.path = path
+        self.parent_id = parent_id
+        self.filename = filename
+        self.lease_id = lease_id
+        self.closed = False
+
+        self._buffer = tempfile.SpooledTemporaryFile(
+            max_size=8 * 1024 * 1024
+        )
+        self._download = None
+        self._download_buffer = b""
+        self._download_hash = hashlib.sha256()
+        self._download_size = 0
+        self._expected_block_index = 0
+        self._eof = False
+
+        if mode == "r":
+            self._download = client.stub.DownloadFile(
+                data_pb2.DownloadFileRequest(
+                    owner_id=owner_id, file_id=entry.entry_id
+                ),
+                timeout=300,
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+        return False
+
+    def _ensure_open(self):
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+
+    def read(self, size=-1):
+        self._ensure_open()
+
+        if self.mode != "r":
+            raise OSError("File is not open for reading")
+
+        if size == 0:
+            return b""
+
+        if size is None or size < 0:
+            while not self._eof:
+                self._pull_block()
+
+            data = self._download_buffer
+            self._download_buffer = b""
+            return data
+
+        while len(self._download_buffer) < size and not self._eof:
+            self._pull_block()
+
+        data = self._download_buffer[:size]
+        self._download_buffer = self._download_buffer[size:]
+        return data
+
+    def _pull_block(self):
+        try:
+            block = next(self._download)
+        except StopIteration:
+            self._finish_download()
+            return
+
+        if block.block_index != self._expected_block_index:
+            raise DownloadIntegrityError(
+                "Unexpected block index: "
+                f"got {block.block_index}, "
+                f"expected {self._expected_block_index}"
+            )
+
+        self._download_hash.update(block.data)
+        self._download_size += len(block.data)
+        self._download_buffer += block.data
+        self._expected_block_index += 1
+
+    def _finish_download(self):
+        if self._download_size != self.entry.size:
+            raise DownloadIntegrityError(
+                f"Downloaded {self._download_size} bytes, "
+                f"expected {self.entry.size}"
+            )
+
+        actual_checksum = self._download_hash.hexdigest()
+
+        if actual_checksum != self.entry.checksum:
+            raise DownloadIntegrityError(
+                f"Downloaded checksum {actual_checksum} "
+                f"does not match metadata checksum {self.entry.checksum}"
+            )
+
+        self._eof = True
+
+    def write(self, data):
+        self._ensure_open()
+
+        if self.mode != "w":
+            raise OSError("File is not open for writing")
+
+        self._buffer.write(data)
+        return len(data)
+
+    def close(self):
+        if self.closed:
+            return None
+
+        self.closed = True
+
+        if self.mode == "r":
+            if not self._eof and self._download is not None:
+                self._download.cancel()
+
+            return None
+
+        try:
+            self._buffer.seek(0)
+
+            return self.client.upload_stream(
+                self._buffer,
+                self.owner_id,
+                self.parent_id or "",
+                self.filename,
+                lease_id=self.lease_id or "",
+            )
+        finally:
+            self._buffer.close()
 
 
 class DFSClient:
@@ -142,30 +299,173 @@ class DFSClient:
 
         remote_filename = filename or path.name
 
+        with open(path, "rb") as file:
+            return self.upload_stream(
+                file,
+                owner_id,
+                parent_id,
+                remote_filename,
+            )
+
+    def upload_stream(
+        self,
+        fileobj,
+        owner_id,
+        parent_id="",
+        filename="",
+        lease_id="",
+    ):
         def requests():
 
             yield data_pb2.UploadFileRequest(
                 header=data_pb2.UploadHeader(
                     owner_id=owner_id,
                     parent_id=parent_id,
-                    filename=remote_filename,
+                    filename=filename,
+                    lease_id=lease_id,
                 )
             )
 
-            with open(path, "rb") as file:
-                while True:
-                    chunk = file.read(CHUNK_SIZE)
+            while True:
+                chunk = fileobj.read(CHUNK_SIZE)
 
-                    if not chunk:
-                        break
+                if not chunk:
+                    break
 
-                    yield data_pb2.UploadFileRequest(
-                        chunk=data_pb2.UploadChunk(data=chunk)
-                    )
+                yield data_pb2.UploadFileRequest(
+                    chunk=data_pb2.UploadChunk(data=chunk)
+                )
 
-        response = self.stub.UploadFile(requests(), timeout=300)
+        return self.stub.UploadFile(requests(), timeout=300)
 
-        return response
+    def open(self, target, mode, owner_id, ttl_seconds=300):
+        if mode not in ("r", "w"):
+            raise ValueError("Mode must be 'r' or 'w'")
+
+        target = str(target)
+
+        if mode == "r":
+            if _is_uuid(target):
+                entry = self.stat(target, owner_id)
+            else:
+                entry = self.resolve_path(target, owner_id)
+
+            if entry.type != "FILE":
+                raise IsADirectoryError(f"Not a file: {target}")
+
+            if entry.size < 0:
+                raise DownloadIntegrityError(
+                    "Metadata contains an invalid file size"
+                )
+
+            if len(entry.checksum) != 64:
+                raise DownloadIntegrityError(
+                    "Metadata checksum is missing or invalid; refusing open"
+                )
+
+            return FileHandle(
+                self, owner_id, "r", entry=entry, path=target
+            )
+
+        if _is_uuid(target):
+            raise ValueError("Write mode requires a path, not an entry ID")
+
+        normalized = normalize_path(target)
+        parent_path, filename = split_parent(normalized)
+
+        if not filename:
+            raise InvalidPath("Cannot open the root directory for writing")
+
+        parent = self.resolve_path(parent_path, owner_id)
+
+        if parent.type != "DIRECTORY":
+            raise NotADirectoryError(f"Not a directory: {parent_path}")
+
+        try:
+            self.resolve_path(normalized, owner_id)
+        except grpc.RpcError as error:
+            if error.code() != grpc.StatusCode.NOT_FOUND:
+                raise
+        else:
+            raise FileExistsError(f"Entry already exists: {normalized}")
+
+        try:
+            lease = self.metadata_stub.AcquireUploadLease(
+                metadata_pb2.AcquireUploadLeaseRequest(
+                    owner_id=owner_id,
+                    parent_id=parent.entry_id,
+                    name=filename,
+                    ttl_seconds=ttl_seconds,
+                ),
+                timeout=30,
+            )
+        except grpc.RpcError as error:
+            if error.code() == grpc.StatusCode.ALREADY_EXISTS:
+                raise FileExistsError(
+                    f"Entry already exists: {normalized}"
+                ) from error
+
+            raise
+
+        if not lease.success:
+            raise RuntimeError(
+                lease.message or "Upload lease acquisition failed"
+            )
+
+        return FileHandle(
+            self,
+            owner_id,
+            "w",
+            path=normalized,
+            parent_id=parent.entry_id,
+            filename=filename,
+            lease_id=lease.lease_id,
+        )
+
+    def lock(self, path, owner_id, ttl_seconds=300):
+        parent_path, filename = split_parent(path)
+
+        if not filename:
+            raise InvalidPath("Cannot lock the root directory")
+
+        parent = self.resolve_path(parent_path, owner_id)
+
+        if parent.type != "DIRECTORY":
+            raise NotADirectoryError(f"Not a directory: {parent_path}")
+
+        try:
+            lease = self.metadata_stub.AcquireUploadLease(
+                metadata_pb2.AcquireUploadLeaseRequest(
+                    owner_id=owner_id,
+                    parent_id=parent.entry_id,
+                    name=filename,
+                    ttl_seconds=ttl_seconds,
+                ),
+                timeout=30,
+            )
+        except grpc.RpcError as error:
+            if error.code() == grpc.StatusCode.ALREADY_EXISTS:
+                raise FileExistsError(
+                    f"Entry already exists: {path}"
+                ) from error
+
+            raise
+
+        if not lease.success:
+            raise RuntimeError(
+                lease.message or "Upload lease acquisition failed"
+            )
+
+        return lease.lease_id
+
+    def unlock(self, lease_id, owner_id):
+        return self.metadata_stub.ReleaseUploadLease(
+            metadata_pb2.ReleaseUploadLeaseRequest(
+                owner_id=owner_id,
+                lease_id=lease_id,
+            ),
+            timeout=30,
+        )
 
     def upload_path(self, local_path, remote_path, owner_id):
 
