@@ -27,6 +27,28 @@ services:
     networks:
       - dfsha_network
 
+  metadata:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dfsha-metadata
+    restart: unless-stopped
+
+    command: ["python", "-m", "src.metadata.server"]
+
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dfsha}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dfsha}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "50051:50051"
+
+    networks:
+      - dfsha_network
+
   storage-1:
     build:
       context: .

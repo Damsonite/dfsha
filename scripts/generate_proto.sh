@@ -6,13 +6,15 @@ python -m grpc_tools.protoc \
     -I./proto \
     --python_out=./src/common \
     --grpc_python_out=./src/common \
-    ./proto/storage.proto
+    ./proto/*.proto
 
-# protoc emite un import absoluto ("import storage_pb2"), que falla al
-# importar el modulo como src.common.storage_pb2_grpc porque src/common
-# no esta en sys.path. Lo reescribimos al import del paquete real.
-sed -i \
-    's/^import storage_pb2 as storage__pb2$/from src.common import storage_pb2 as storage__pb2/' \
-    ./src/common/storage_pb2_grpc.py
+# protoc emite imports absolutos ("import storage_pb2"), que fallan al
+# importar los modulos como src.common.*_pb2_grpc porque src/common no
+# esta en sys.path. Los reescribimos al import del paquete real.
+for generated in ./src/common/*_pb2_grpc.py; do
+    sed -i -E \
+        's/^import ([A-Za-z0-9_]+_pb2) as ([A-Za-z0-9_]+)$/from src.common import \1 as \2/' \
+        "$generated"
+done
 
 echo "Protocol Buffers generados correctamente."

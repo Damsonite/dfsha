@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package dfsha.metadata;
+
+service MetadataService {
+  rpc Mkdir(MkdirRequest) returns (EntryResponse);
+
+  rpc ListDir(ListDirRequest) returns (ListDirResponse);
+
+  rpc Stat(StatRequest) returns (EntryResponse);
+
+  rpc Remove(RemoveRequest) returns (OperationResponse);
+
+  rpc RegisterFile(RegisterFileRequest) returns (EntryResponse);
+
+  rpc LocateBlocks(LocateBlocksRequest) returns (LocateBlocksResponse);
+
+  rpc RegisterNode(RegisterNodeRequest) returns (OperationResponse);
+
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message MkdirRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+  string name = 3;
+}
+
+message ListDirRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+}
+
+message StatRequest {
+  string owner_id = 1;
+  string entry_id = 2;
+}
+
+message RemoveRequest {
+  string owner_id = 1;
+  string entry_id = 2;
+}
+
+message RegisterFileRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+  string name = 3;
+  int64 size = 4;
+  string checksum = 5;
+}
+
+message RegisterNodeRequest {
+  string node_id = 1;
+  string endpoint = 2;
+}
+
+message EntryResponse {
+  bool success = 1;
+  string entry_id = 2;
+  string name = 3;
+  string type = 4;
+  int64 size = 5;
+  string checksum = 6;
+  int32 version = 7;
+  string message = 8;
+}
+
+message EntryItem {
+  string entry_id = 1;
+  string name = 2;
+  string type = 3;
+  int64 size = 4;
+}
+
+message ListDirResponse {
+  repeated EntryItem entries = 1;
+  string message = 2;
+}
+
+message OperationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message BlockLocation {
+  string block_id = 1;
+  int32 block_index = 2;
+  int64 offset = 3;
+  int32 size = 4;
+  string checksum = 5;
+  int32 version = 6;
+  repeated string node_endpoints = 7;
+}
+
+message LocateBlocksRequest {
+  string owner_id = 1;
+  string file_id = 2;
+}
+
+message LocateBlocksResponse {
+  repeated BlockLocation blocks = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
