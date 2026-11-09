@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, text
 
 from src.common.auth import hash_token
+from src.common.storage_nodes import parse_storage_nodes
 from src.metadata.database import Base, SessionLocal, engine
 from src.metadata.models import (
     AuthToken,
@@ -64,17 +65,15 @@ def initialize_database():
             )
 
         # Registro de los Storage Nodes
-        nodes = [
-            ("storage-1", "storage-1:50061"),
-            ("storage-2", "storage-2:50061"),
-            ("storage-3", "storage-3:50061"),
-        ]
+        nodes = parse_storage_nodes()
 
         for node_id, endpoint in nodes:
             node = session.get(StorageNode, node_id)
 
             if not node:
                 session.add(StorageNode(id=node_id, endpoint=endpoint, status="ACTIVE"))
+            elif node.endpoint != endpoint:
+                node.endpoint = endpoint
 
         session.execute(
             delete(UploadLease).where(

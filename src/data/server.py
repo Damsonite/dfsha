@@ -23,6 +23,7 @@ from src.common.auth import (
     extract_bearer_token,
 )
 from src.common.consistent_hash import ConsistentHash
+from src.common.storage_nodes import parse_storage_nodes
 
 BLOCK_SIZE = 4 * 1024 * 1024
 REPLICATION_FACTOR = 3
@@ -67,11 +68,13 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             grpc.insecure_channel("metadata:50051")
         )
 
-        self.nodes = {
-            "storage-1": "storage-1:50061",
-            "storage-2": "storage-2:50061",
-            "storage-3": "storage-3:50061",
-        }
+        self.nodes = dict(parse_storage_nodes())
+
+        if len(self.nodes) < REPLICATION_FACTOR:
+            raise RuntimeError(
+                "DFSHA_STORAGE_NODES must define at least "
+                f"{REPLICATION_FACTOR} storage nodes; got {len(self.nodes)}"
+            )
 
         self.service_token = os.getenv(
             "DFSHA_SERVICE_TOKEN", DEFAULT_SERVICE_TOKEN
@@ -268,8 +271,6 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
         written_blocks = []
         lease_id = None
 
-        file_id = str(uuid.uuid4())
-
         file_hash = hashlib.sha256()
         total_size = 0
         block_index = 0
@@ -340,7 +341,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     del buffer[:BLOCK_SIZE]
 
                     block = self._store_block(
-                        file_id, block_index, block_data, written_blocks
+                        block_index, block_data, written_blocks
                     )
 
                     blocks.append(block)
@@ -360,7 +361,7 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
             if buffer:
                 block = self._store_block(
-                    file_id, block_index, bytes(buffer), written_blocks
+                    block_index, bytes(buffer), written_blocks
                 )
 
                 blocks.append(block)
@@ -551,15 +552,15 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                         error,
                     )
 
-    def _store_block(self, file_id, block_index, data, written_blocks):
+    def _store_block(self, block_index, data, written_blocks):
 
         block_id = str(uuid.uuid4())
 
         checksum = hashlib.sha256(data).hexdigest()
 
-        placement_key = f"{file_id}:{block_index}"
-
-        nodes = self.ring.get_nodes(placement_key, count=REPLICATION_FACTOR)
+        # The block ID is the stable placement key. Writes and repairs use
+        # the same key, so a repaired replica returns to the original nodes.
+        nodes = self.ring.get_nodes(block_id, count=REPLICATION_FACTOR)
 
         # Record every candidate node before writing. Cleanup is deliberately
         # broader than the acknowledged replicas: a timed-out write may still
@@ -951,16 +952,17 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
             existing_node_ids = set(block.node_ids)
 
-            for candidate in self.ring.get_nodes(
-                block.block_id, count=target_replicas
-            ):
-                if candidate in existing_node_ids:
-                    continue
+            if len(existing_node_ids) < target_replicas:
+                for candidate in self.ring.get_nodes(
+                    block.block_id, count=target_replicas
+                ):
+                    if candidate in existing_node_ids:
+                        continue
 
-                if not self._node_is_healthy(candidate):
-                    continue
+                    if not self._node_is_healthy(candidate):
+                        continue
 
-                targets.append((candidate, True))
+                    targets.append((candidate, True))
 
             if not targets:
                 continue

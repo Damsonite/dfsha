@@ -18,7 +18,30 @@ METADATA_ENDPOINT = "localhost:50051"
 DATA_ENDPOINT = "localhost:50052"
 OWNER_ID = "user-001"
 FAILED_NODE = "storage-3"
-FAILED_CONTAINER = "dfsha-storage-3"
+
+
+def node_id_from_endpoint(endpoint):
+    return endpoint.split(":", 1)[0]
+
+
+def container_from_endpoint(endpoint):
+    return f"dfsha-{node_id_from_endpoint(endpoint)}"
+
+
+def stop_storage_node(node_id):
+    subprocess.run(
+        ["docker", "stop", f"dfsha-{node_id}"],
+        check=True,
+        capture_output=True,
+    )
+
+
+def start_storage_node(node_id):
+    subprocess.run(
+        ["docker", "start", f"dfsha-{node_id}"],
+        check=True,
+        capture_output=True,
+    )
 
 
 def wait_for_channel(channel, name):
@@ -49,7 +72,7 @@ def storage_block_count(node_number):
 
 
 def block_counts():
-    return tuple(storage_block_count(node) for node in (1, 2, 3))
+    return tuple(storage_block_count(node) for node in (1, 2, 3, 4))
 
 
 def node_status(node_id):
@@ -134,7 +157,7 @@ def main():
 
             block = locate_block(metadata_stub, repair_upload.file_id)
             endpoint = block.node_endpoints[0]
-            container = f"dfsha-{endpoint.split(':', 1)[0]}"
+            container = container_from_endpoint(endpoint)
 
             docker_exec(
                 container,
@@ -172,25 +195,21 @@ def main():
 
             assert endpoint_count(metadata_stub, health_upload.file_id) == 3
 
-            subprocess.run(
-                ["docker", "stop", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            health_block = locate_block(metadata_stub, health_upload.file_id)
+            health_endpoint = health_block.node_endpoints[0]
+            health_node = node_id_from_endpoint(health_endpoint)
 
-            wait_for_node_status(FAILED_NODE, "INACTIVE")
+            stop_storage_node(health_node)
+
+            wait_for_node_status(health_node, "INACTIVE")
 
             assert endpoint_count(metadata_stub, health_upload.file_id) == 2
 
             print("OK   unhealthy node excluded from block locations")
 
-            subprocess.run(
-                ["docker", "start", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            start_storage_node(health_node)
 
-            wait_for_node_status(FAILED_NODE, "ACTIVE")
+            wait_for_node_status(health_node, "ACTIVE")
 
             assert endpoint_count(metadata_stub, health_upload.file_id) == 3
 
@@ -198,30 +217,34 @@ def main():
 
             client.remove(health_upload.file_id, OWNER_ID)
 
-            replicate_file = temporary_path / "replicate.bin"
-            replicate_file.write_bytes(b"replicate replica\n" * 10000)
-
-            subprocess.run(
-                ["docker", "stop", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            stop_storage_node(FAILED_NODE)
 
             wait_for_node_status(FAILED_NODE, "INACTIVE")
 
-            replicate_upload = client.upload(
-                replicate_file, OWNER_ID, root.entry_id
-            )
+            replicate_upload = None
 
-            assert endpoint_count(metadata_stub, replicate_upload.file_id) == 2
+            for attempt in range(10):
+                replicate_file = temporary_path / f"replicate-{attempt}.bin"
+                replicate_file.write_bytes(b"replicate replica\n" * 10000)
+
+                candidate = client.upload(
+                    replicate_file, OWNER_ID, root.entry_id
+                )
+
+                if endpoint_count(metadata_stub, candidate.file_id) == 2:
+                    replicate_upload = candidate
+                    break
+
+                client.remove(candidate.file_id, OWNER_ID)
+
+            if replicate_upload is None:
+                raise AssertionError(
+                    f"no block was placed on {FAILED_NODE} after 10 attempts"
+                )
 
             print("OK   upload completed with two replicas while node was down")
 
-            subprocess.run(
-                ["docker", "start", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            start_storage_node(FAILED_NODE)
 
             wait_for_node_status(FAILED_NODE, "ACTIVE")
 
@@ -247,13 +270,13 @@ def main():
                 partial_file, OWNER_ID, root.entry_id
             )
 
-            subprocess.run(
-                ["docker", "stop", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            partial_block = locate_block(metadata_stub, partial_upload.file_id)
+            partial_endpoint = partial_block.node_endpoints[0]
+            partial_node = node_id_from_endpoint(partial_endpoint)
 
-            wait_for_node_status(FAILED_NODE, "INACTIVE")
+            stop_storage_node(partial_node)
+
+            wait_for_node_status(partial_node, "INACTIVE")
 
             try:
                 client.remove(partial_upload.file_id, OWNER_ID)
@@ -271,13 +294,9 @@ def main():
 
             print("OK   entry preserved after failed rm")
 
-            subprocess.run(
-                ["docker", "start", FAILED_CONTAINER],
-                check=True,
-                capture_output=True,
-            )
+            start_storage_node(partial_node)
 
-            wait_for_node_status(FAILED_NODE, "ACTIVE")
+            wait_for_node_status(partial_node, "ACTIVE")
 
             client.remove(partial_upload.file_id, OWNER_ID)
 
@@ -302,11 +321,12 @@ def main():
         print(f"OK   physical block count restored: {counts_after}")
 
     finally:
-        subprocess.run(
-            ["docker", "start", FAILED_CONTAINER],
-            check=False,
-            capture_output=True,
-        )
+        for node_number in (1, 2, 3, 4):
+            subprocess.run(
+                ["docker", "start", f"dfsha-storage-{node_number}"],
+                check=False,
+                capture_output=True,
+            )
         client.close()
         data_channel.close()
         metadata_channel.close()

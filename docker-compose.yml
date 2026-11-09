@@ -41,6 +41,7 @@ services:
       DFSHA_DEMO_TOKEN: ${DFSHA_DEMO_TOKEN:-dev-demo-token}
       DFSHA_SECOND_USER_TOKEN: ${DFSHA_SECOND_USER_TOKEN:-dev-second-token}
       DFSHA_SERVICE_TOKEN: ${DFSHA_SERVICE_TOKEN:-dev-service-token}
+      DFSHA_STORAGE_NODES: "${DFSHA_STORAGE_NODES:-storage-1=storage-1:50061,storage-2=storage-2:50061,storage-3=storage-3:50061,storage-4=storage-4:50061}"
 
     depends_on:
       postgres:
@@ -68,12 +69,14 @@ services:
       REPAIR_INTERVAL_SECONDS: ${REPAIR_INTERVAL_SECONDS:-30}
       DFSHA_SERVICE_TOKEN: ${DFSHA_SERVICE_TOKEN:-dev-service-token}
       DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
+      DFSHA_STORAGE_NODES: "${DFSHA_STORAGE_NODES:-storage-1=storage-1:50061,storage-2=storage-2:50061,storage-3=storage-3:50061,storage-4=storage-4:50061}"
 
     depends_on:
       - metadata
       - storage-1
       - storage-2
       - storage-3
+      - storage-4
 
     ports:
       - "50052:50052"
@@ -135,12 +138,31 @@ services:
     networks:
       - dfsha_network
 
+  storage-4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dfsha-storage-4
+    restart: unless-stopped
+    environment:
+      NODE_ID: storage-4
+      GRPC_PORT: 50061
+      STORAGE_PATH: /data
+      DFSHA_STORAGE_TOKEN: ${DFSHA_STORAGE_TOKEN:-dev-storage-token}
+    ports:
+      - "50064:50061"
+    volumes:
+      - storage_4_data:/data
+    networks:
+      - dfsha_network
+
 
 volumes:
   postgres_data:
   storage_1_data:
   storage_2_data:
   storage_3_data:
+  storage_4_data:
 
 
 networks:

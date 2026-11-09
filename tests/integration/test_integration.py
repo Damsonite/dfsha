@@ -43,7 +43,7 @@ def test_authentication_and_authorization():
     auth_script.main()
 
 
-@pytest.mark.parametrize("port", [50061, 50062, 50063])
+@pytest.mark.parametrize("port", [50061, 50062, 50063, 50064])
 def test_storage_node(port):
     storage_script.test_node(f"localhost:{port}")
 

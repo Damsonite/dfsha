@@ -2,28 +2,31 @@
 
 DFSha es un sistema de archivos distribuido sobre gRPC. El proyecto separa los
 metadatos (namespace, usuarios y réplicas) del plano de datos (subida y descarga
-de bloques), y replica cada bloque en tres Storage Nodes.
+de bloques), y replica cada bloque en tres de los cuatro Storage Nodes.
 
 ## Arquitectura
 
-| Componente        | Puerto | Responsabilidad                                                                                                                |
-| ----------------- | -----: | ------------------------------------------------------------------------------------------------------------------------------ |
-| Metadata Service  |  50051 | Árbol de directorios, permisos, checksums, leases de subida y ubicación de réplicas. Persiste en PostgreSQL.                   |
-| Data Service      |  50052 | Recibe y ensambla los bloques, aplica el anillo de hashing consistente, replica y repara.                                      |
-| Storage Nodes (3) |  50061 | Almacenan los bloques en disco. Los puertos 50062 y 50063 del host también apuntan al puerto interno 50061 de los nodos 2 y 3. |
-| Cliente / CLI     |      — | Se ejecuta en el host y habla con los servicios en `localhost:50051` y `localhost:50052`.                                      |
-| PostgreSQL        |   5432 | Base de datos del Metadata Service.                                                                                            |
+| Componente        | Puerto | Responsabilidad                                                                                                                       |
+| ----------------- | -----: | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata Service  |  50051 | Árbol de directorios, permisos, checksums, leases de subida y ubicación de réplicas. Persiste en PostgreSQL.                          |
+| Data Service      |  50052 | Recibe y ensambla los bloques, aplica el anillo de hashing consistente, replica y repara.                                             |
+| Storage Nodes (4) |  50061 | Almacenan los bloques en disco. Los puertos 50062, 50063 y 50064 del host también apuntan al puerto interno 50061 de los nodos 2, 3 y 4. |
+| Cliente / CLI     |      — | Se ejecuta en el host y habla con los servicios en `localhost:50051` y `localhost:50052`.                                             |
+| PostgreSQL        |   5432 | Base de datos del Metadata Service.                                                                                                   |
 
 Los archivos se dividen en bloques de 4 MiB. Cada bloque se escribe con factor
-de replicación 3 y quórum de escritura 2. El Data Service comprueba
-periódicamente la salud de los nodos y repara réplicas dañadas o ausentes.
+de replicación 3 y quórum de escritura 2 sobre un clúster de cuatro nodos. El
+anillo de hashing consistente decide qué tres nodos almacenan cada bloque, por
+lo que los bloques y los archivos quedan particionados entre los nodos. El Data
+Service comprueba periódicamente la salud de los nodos y repara réplicas dañadas
+o ausentes.
 
 ## Requisitos
 
 - Docker Engine y Docker Compose v2.
 - Python 3.14 para ejecutar el cliente, los tests y el benchmark en el host
   (es la misma versión que usa la imagen Docker).
-- Puertos libres: `50051`, `50052`, `50061`, `50062`, `50063` y `5432`
+- Puertos libres: `50051`, `50052`, `50061`, `50062`, `50063`, `50064` y `5432`
   (o cambia `POSTGRES_PORT`).
 
 ## Instalación
@@ -53,7 +56,7 @@ docker compose ps
 
 Al arrancar, el Metadata Service crea las tablas, los usuarios `user-001`,
 `user-002` y `service`, y registra los tokens definidos en `.env`. Los Storage
-Nodes se registran como `storage-1`, `storage-2` y `storage-3`.
+Nodes se registran como `storage-1`, `storage-2`, `storage-3` y `storage-4`.
 
 Para seguir el arranque:
 
@@ -138,13 +141,26 @@ invocar las operaciones administrativas.
 | `DATA_ENDPOINT`     | `localhost:50052` | Endpoint del Data Service.     |
 | `METADATA_ENDPOINT` | `localhost:50051` | Endpoint del Metadata Service. |
 
+### Membresía de Storage Nodes
+
+`DFSHA_STORAGE_NODES` define los nodos registrados por el Metadata Service y
+usados por el Data Service. El formato es `id=endpoint` separado por comas. El
+valor por defecto incluye los cuatro nodos de Compose; debe declarar al menos
+tres (el factor de replicación) y no puede repetir identificadores. Cambiar la
+lista no rebalancea los bloques existentes: la reparación solo completa
+réplicas faltantes de los bloques que ya tienen menos de tres.
+
+| Variable              | Valor por defecto                                                                                                                    | Descripción                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `DFSHA_STORAGE_NODES` | `storage-1=storage-1:50061,storage-2=storage-2:50061,storage-3=storage-3:50061,storage-4=storage-4:50061`                          | Lista de nodos usada por el Metadata y el Data Service. |
+
 ### Storage Nodes
 
-| Variable       | Valor por defecto | Descripción                                                                    |
-| -------------- | ----------------- | ------------------------------------------------------------------------------ |
-| `NODE_ID`      | `storage-unknown` | Identificador del nodo. Compose asigna `storage-1`, `storage-2` y `storage-3`. |
-| `GRPC_PORT`    | `50061`           | Puerto gRPC del nodo dentro del contenedor.                                    |
-| `STORAGE_PATH` | `/data`           | Directorio donde se guardan los bloques.                                       |
+| Variable       | Valor por defecto | Descripción                                                                              |
+| -------------- | ----------------- | ---------------------------------------------------------------------------------------- |
+| `NODE_ID`      | `storage-unknown` | Identificador del nodo. Compose asigna `storage-1`, `storage-2`, `storage-3` y `storage-4`. |
+| `GRPC_PORT`    | `50061`           | Puerto gRPC del nodo dentro del contenedor.                                              |
+| `STORAGE_PATH` | `/data`           | Directorio donde se guardan los bloques.                                                 |
 
 ### Metadata Service
 
@@ -343,8 +359,8 @@ docker compose logs -f data
 ```
 
 Los datos persisten en los volúmenes `postgres_data`, `storage_1_data`,
-`storage_2_data` y `storage_3_data`. `docker compose down -v` elimina también
-esos volúmenes y, con ellos, todos los archivos y metadatos.
+`storage_2_data`, `storage_3_data` y `storage_4_data`. `docker compose down -v`
+elimina también esos volúmenes y, con ellos, todos los archivos y metadatos.
 
 ## Estructura del proyecto
 

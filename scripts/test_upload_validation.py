@@ -14,6 +14,7 @@ METADATA_ENDPOINT = "localhost:50051"
 DATA_ENDPOINT = "localhost:50052"
 OWNER_ID = "user-001"
 PAYLOAD_SIZE = 5 * 1024 * 1024 + 123
+REPLICATION_FACTOR = 3
 
 
 def wait_for_channel(channel, name):
@@ -44,7 +45,7 @@ def storage_block_count(node_number):
 
 
 def block_counts():
-    return tuple(storage_block_count(node) for node in (1, 2, 3))
+    return tuple(storage_block_count(node) for node in (1, 2, 3, 4))
 
 
 def expect_rpc_error(action, expected_code, label):
@@ -142,12 +143,23 @@ def main():
             )
 
             counts_after_upload = block_counts()
-            expected_after_upload = tuple(count + 2 for count in counts_before)
-
-            assert counts_after_upload == expected_after_upload, (
-                f"expected {expected_after_upload} blocks after upload, "
-                f"got {counts_after_upload}"
+            expected_after_upload = (
+                sum(counts_before) + response.block_count * REPLICATION_FACTOR
             )
+            increments = [
+                after - before
+                for after, before in zip(counts_after_upload, counts_before)
+            ]
+
+            assert sum(counts_after_upload) == expected_after_upload, (
+                f"expected {expected_after_upload} total blocks after upload, "
+                f"got {sum(counts_after_upload)}"
+            )
+
+            assert all(
+                0 <= increment <= response.block_count
+                for increment in increments
+            ), f"unexpected per-node block increments: {increments}"
 
             print(f"OK   replica count after upload: {counts_after_upload}")
 

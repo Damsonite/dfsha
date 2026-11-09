@@ -34,7 +34,7 @@ def storage_block_count(node_number):
 
 
 def block_counts():
-    return tuple(storage_block_count(node) for node in (1, 2, 3))
+    return tuple(storage_block_count(node) for node in (1, 2, 3, 4))
 
 
 def expect_rpc_error(action, expected_code, label):

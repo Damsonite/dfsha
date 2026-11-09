@@ -16,6 +16,7 @@ from src.common.auth import DEFAULT_CLIENT_TOKEN, ClientTokenInterceptor
 METADATA_ENDPOINT = "localhost:50051"
 DATA_ENDPOINT = "localhost:50052"
 OWNER_ID = "user-001"
+REPLICATION_FACTOR = 3
 
 
 def wait_for_channel(channel, name):
@@ -46,7 +47,7 @@ def storage_block_count(node_number):
 
 
 def block_counts():
-    return tuple(storage_block_count(node) for node in (1, 2, 3))
+    return tuple(storage_block_count(node) for node in (1, 2, 3, 4))
 
 
 def expect_rpc_error(action, expected_code, label):
@@ -276,10 +277,13 @@ def main():
             )
 
             counts_after_race = block_counts()
-            expected_after_race = tuple(count + 1 for count in counts_before)
+            expected_after_race = (
+                sum(counts_before)
+                + winning_response.block_count * REPLICATION_FACTOR
+            )
 
-            assert counts_after_race == expected_after_race, (
-                f"expected {expected_after_race}, got {counts_after_race}"
+            assert sum(counts_after_race) == expected_after_race, (
+                f"expected {expected_after_race}, got {sum(counts_after_race)}"
             )
 
             print(f"OK   no orphan blocks from concurrent upload: {counts_after_race}")
