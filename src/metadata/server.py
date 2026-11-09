@@ -1,13 +1,18 @@
+import re
 from concurrent import futures
 from uuid import UUID
 
 import grpc
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from src.common import metadata_pb2, metadata_pb2_grpc
 from src.metadata.database import SessionLocal
 from src.metadata.models import Block, BlockReplica, Entry, StorageNode, User
 from src.metadata.repository import initialize_database
+
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MAX_BLOCK_SIZE = 4 * 1024 * 1024
 
 
 class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
@@ -347,11 +352,20 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
             if existing:
                 context.abort(grpc.StatusCode.ALREADY_EXISTS, "Entry already exists")
 
-            if not request.name or "/" in request.name:
+            if (
+                not request.name
+                or len(request.name) > 255
+                or "/" in request.name
+                or "\x00" in request.name
+                or request.name in (".", "..")
+            ):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename")
 
             if request.size < 0:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid file size")
+
+            if not SHA256_PATTERN.fullmatch(request.checksum):
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid file checksum")
 
             if request.size == 0 and len(request.blocks) != 0:
                 context.abort(
@@ -375,6 +389,17 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
                 if block.offset != expected_offset or block.size <= 0:
                     context.abort(
                         grpc.StatusCode.INVALID_ARGUMENT, "Invalid block layout"
+                    )
+
+                if block.size > MAX_BLOCK_SIZE:
+                    context.abort(
+                        grpc.StatusCode.INVALID_ARGUMENT,
+                        "Block exceeds maximum size",
+                    )
+
+                if not SHA256_PATTERN.fullmatch(block.checksum):
+                    context.abort(
+                        grpc.StatusCode.INVALID_ARGUMENT, "Invalid block checksum"
                     )
 
                 if not block.node_ids:
@@ -452,10 +477,76 @@ class MetadataServicer(metadata_pb2_grpc.MetadataServiceServicer):
                     message="File committed successfully",
                 )
 
+            except IntegrityError as error:
+                session.rollback()
+
+                if "uq_entry_namespace" in str(error.orig):
+                    context.abort(
+                        grpc.StatusCode.ALREADY_EXISTS, "Entry already exists"
+                    )
+
+                context.abort(
+                    grpc.StatusCode.INTERNAL, f"Database integrity error: {error.orig}"
+                )
+
             except Exception as error:
                 session.rollback()
 
                 context.abort(grpc.StatusCode.INTERNAL, str(error))
+
+    def PrepareUpload(self, request, context):
+        """Validate an upload before the Data Service writes any block.
+
+        This is an advisory check, not a lock: the final uniqueness guarantee
+        remains the uq_entry_namespace index enforced by CommitFile.
+        """
+
+        with SessionLocal() as session:
+            if not session.get(User, request.owner_id):
+                context.abort(grpc.StatusCode.NOT_FOUND, "User not found")
+
+            parent_id = None
+
+            if request.parent_id:
+                try:
+                    parent_id = UUID(request.parent_id)
+                except ValueError:
+                    context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid parent ID")
+
+                parent = session.get(Entry, parent_id)
+
+                if (
+                    not parent
+                    or parent.owner_id != request.owner_id
+                    or parent.type != "DIRECTORY"
+                ):
+                    context.abort(
+                        grpc.StatusCode.NOT_FOUND, "Parent directory not found"
+                    )
+
+            if (
+                not request.name
+                or len(request.name) > 255
+                or "/" in request.name
+                or "\x00" in request.name
+                or request.name in (".", "..")
+            ):
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename")
+
+            existing = session.scalar(
+                select(Entry).where(
+                    Entry.owner_id == request.owner_id,
+                    Entry.parent_id == parent_id,
+                    Entry.name == request.name,
+                )
+            )
+
+            if existing:
+                context.abort(grpc.StatusCode.ALREADY_EXISTS, "Entry already exists")
+
+            return metadata_pb2.OperationResponse(
+                success=True, message="Upload validated"
+            )
 
 
 def serve():

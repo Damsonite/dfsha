@@ -1,4 +1,7 @@
 import argparse
+import sys
+
+import grpc
 
 from src.client.dfs_client import DFSClient
 
@@ -42,6 +45,17 @@ def main():
             print("\nArchivo descargado correctamente")
             print(f"Ruta: {result['path']}")
             print(f"SHA-256: {result['checksum']}")
+
+    except grpc.RpcError as error:
+        print(
+            f"Error: {error.code().name}: {error.details()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    except OSError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
 
     finally:
         client.close()

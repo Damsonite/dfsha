@@ -58,6 +58,9 @@ services:
 
     command: ["python", "-m", "src.data.server"]
 
+    environment:
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
+
     depends_on:
       - metadata
       - storage-1

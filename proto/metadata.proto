@@ -20,6 +20,14 @@ service MetadataService {
   rpc Health(HealthRequest) returns (HealthResponse);
 
   rpc CommitFile(CommitFileRequest) returns (EntryResponse);
+
+  rpc PrepareUpload(PrepareUploadRequest) returns (OperationResponse);
+}
+
+message PrepareUploadRequest {
+  string owner_id = 1;
+  string parent_id = 2;
+  string name = 3;
 }
 
 message MkdirRequest {

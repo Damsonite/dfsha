@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import uuid
 from concurrent import futures
@@ -16,11 +17,27 @@ from src.common import (
 from src.common.consistent_hash import ConsistentHash
 
 BLOCK_SIZE = 4 * 1024 * 1024
+REPLICATION_FACTOR = 3
+WRITE_QUORUM = 2
+MAX_FILENAME_LENGTH = 255
+DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
 GRPC_CHANNEL_OPTIONS = [
     ("grpc.max_receive_message_length", 5 * 1024 * 1024),
     ("grpc.max_send_message_length", 5 * 1024 * 1024),
 ]
+
+logger = logging.getLogger(__name__)
+
+
+class UploadRejected(Exception):
+    """Internal control-flow exception for a rejected streaming upload."""
+
+    def __init__(self, code, details, cleanup=True):
+        super().__init__(details)
+        self.code = code
+        self.details = details
+        self.cleanup = cleanup
 
 
 class DataServicer(data_pb2_grpc.DataServiceServicer):
@@ -45,11 +62,32 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         self.ring = ConsistentHash(list(self.nodes.keys()), virtual_nodes=150)
 
+        self.max_upload_bytes = self._read_max_upload_bytes()
+
+    @staticmethod
+    def _read_max_upload_bytes():
+        raw_value = os.getenv("MAX_UPLOAD_BYTES", str(DEFAULT_MAX_UPLOAD_BYTES))
+
+        try:
+            value = int(raw_value)
+        except ValueError as error:
+            raise RuntimeError(
+                f"Invalid MAX_UPLOAD_BYTES={raw_value!r}: must be an integer"
+            ) from error
+
+        if value <= 0:
+            raise RuntimeError(
+                f"Invalid MAX_UPLOAD_BYTES={raw_value!r}: must be greater than zero"
+            )
+
+        return value
+
     def UploadFile(self, request_iterator, context):
 
         header = None
         buffer = bytearray()
         blocks = []
+        written_blocks = []
 
         file_id = str(uuid.uuid4())
 
@@ -59,32 +97,30 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         try:
             for request in request_iterator:
-                if request.WhichOneof("payload") == "header":
+                payload = request.WhichOneof("payload")
+
+                if payload == "header":
                     if header is not None:
-                        context.abort(
-                            grpc.StatusCode.INVALID_ARGUMENT, "Multiple upload headers"
+                        raise UploadRejected(
+                            grpc.StatusCode.INVALID_ARGUMENT,
+                            "Multiple upload headers",
                         )
 
                     header = request.header
 
-                    if (
-                        not header.owner_id
-                        or not header.filename
-                        or "/" in header.filename
-                    ):
-                        context.abort(
-                            grpc.StatusCode.INVALID_ARGUMENT, "Invalid upload metadata"
-                        )
+                    self._validate_upload_header(header)
+                    self._prepare_upload(header)
 
                     continue
 
                 if header is None:
-                    context.abort(
-                        grpc.StatusCode.INVALID_ARGUMENT, "Upload header required first"
+                    raise UploadRejected(
+                        grpc.StatusCode.INVALID_ARGUMENT,
+                        "Upload header required first",
                     )
 
-                if request.WhichOneof("payload") != "chunk":
-                    context.abort(
+                if payload != "chunk":
+                    raise UploadRejected(
                         grpc.StatusCode.INVALID_ARGUMENT, "Invalid upload request"
                     )
 
@@ -92,6 +128,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
                 if not chunk:
                     continue
+
+                if total_size + len(chunk) > self.max_upload_bytes:
+                    raise UploadRejected(
+                        grpc.StatusCode.RESOURCE_EXHAUSTED,
+                        f"Upload exceeds maximum size of {self.max_upload_bytes} bytes",
+                    )
 
                 file_hash.update(chunk)
                 total_size += len(chunk)
@@ -101,33 +143,60 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                     block_data = bytes(buffer[:BLOCK_SIZE])
                     del buffer[:BLOCK_SIZE]
 
-                    block = self._store_block(file_id, block_index, block_data)
+                    block = self._store_block(
+                        file_id, block_index, block_data, written_blocks
+                    )
 
                     blocks.append(block)
 
                     block_index += 1
 
             if header is None:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing upload header")
+                raise UploadRejected(
+                    grpc.StatusCode.INVALID_ARGUMENT, "Missing upload header"
+                )
 
             if buffer:
-                block = self._store_block(file_id, block_index, bytes(buffer))
+                block = self._store_block(
+                    file_id, block_index, bytes(buffer), written_blocks
+                )
 
                 blocks.append(block)
 
             checksum = file_hash.hexdigest()
 
-            commit = self.metadata.CommitFile(
-                metadata_pb2.CommitFileRequest(
-                    owner_id=header.owner_id,
-                    parent_id=header.parent_id,
-                    name=header.filename,
-                    size=total_size,
-                    checksum=checksum,
-                    blocks=blocks,
-                ),
-                timeout=30,
-            )
+            try:
+                commit = self.metadata.CommitFile(
+                    metadata_pb2.CommitFileRequest(
+                        owner_id=header.owner_id,
+                        parent_id=header.parent_id,
+                        name=header.filename,
+                        size=total_size,
+                        checksum=checksum,
+                        blocks=blocks,
+                    ),
+                    timeout=30,
+                )
+            except grpc.RpcError as error:
+                # A deadline or transport failure may happen after the metadata
+                # transaction committed. Deleting the blocks in that case would
+                # leave a committed entry pointing to missing data, so retain
+                # them for the future recovery/GC stage.
+                ambiguous = error.code() in (
+                    grpc.StatusCode.DEADLINE_EXCEEDED,
+                    grpc.StatusCode.UNAVAILABLE,
+                    grpc.StatusCode.INTERNAL,
+                    grpc.StatusCode.UNKNOWN,
+                )
+                raise UploadRejected(
+                    error.code(), error.details(), cleanup=not ambiguous
+                ) from error
+
+            if not commit.success:
+                raise UploadRejected(
+                    grpc.StatusCode.INTERNAL,
+                    commit.message or "File commit failed",
+                )
 
             return data_pb2.UploadFileResponse(
                 success=True,
@@ -139,13 +208,86 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
                 message="File uploaded and committed",
             )
 
+        except UploadRejected as error:
+            if error.cleanup:
+                self._cleanup_blocks(written_blocks)
+            else:
+                logger.warning(
+                    "Commit status unknown; retaining %d block(s) for recovery",
+                    len(written_blocks),
+                )
+
+            context.abort(error.code, error.details)
+
         except grpc.RpcError as error:
+            self._cleanup_blocks(written_blocks)
+
             context.abort(error.code(), error.details())
 
         except Exception as error:
-            context.abort(grpc.StatusCode.INTERNAL, str(error))
+            self._cleanup_blocks(written_blocks)
 
-    def _store_block(self, file_id, block_index, data):
+            context.abort(grpc.StatusCode.INTERNAL, f"Upload failed: {error}")
+
+    @staticmethod
+    def _validate_upload_header(header):
+
+        if not header.owner_id:
+            raise UploadRejected(
+                grpc.StatusCode.INVALID_ARGUMENT, "owner_id is required"
+            )
+
+        name = header.filename
+
+        if (
+            not name
+            or len(name) > MAX_FILENAME_LENGTH
+            or "/" in name
+            or "\x00" in name
+            or name in (".", "..")
+        ):
+            raise UploadRejected(
+                grpc.StatusCode.INVALID_ARGUMENT, "Invalid filename"
+            )
+
+    def _prepare_upload(self, header):
+
+        try:
+            response = self.metadata.PrepareUpload(
+                metadata_pb2.PrepareUploadRequest(
+                    owner_id=header.owner_id,
+                    parent_id=header.parent_id,
+                    name=header.filename,
+                ),
+                timeout=15,
+            )
+        except grpc.RpcError as error:
+            raise UploadRejected(error.code(), error.details()) from error
+
+        if not response.success:
+            raise UploadRejected(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                response.message or "Upload validation failed",
+            )
+
+    def _cleanup_blocks(self, written_blocks):
+
+        for block_id, node_ids in written_blocks:
+            for node_id in node_ids:
+                try:
+                    self.storage_stubs[node_id].DeleteBlock(
+                        storage_pb2.DeleteBlockRequest(block_id=block_id),
+                        timeout=5,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Could not delete block %s from %s during upload cleanup: %s",
+                        block_id,
+                        node_id,
+                        error,
+                    )
+
+    def _store_block(self, file_id, block_index, data, written_blocks):
 
         block_id = str(uuid.uuid4())
 
@@ -153,7 +295,12 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
 
         placement_key = f"{file_id}:{block_index}"
 
-        nodes = self.ring.get_nodes(placement_key, count=3)
+        nodes = self.ring.get_nodes(placement_key, count=REPLICATION_FACTOR)
+
+        # Record every candidate node before writing. Cleanup is deliberately
+        # broader than the acknowledged replicas: a timed-out write may still
+        # have created a block on a node that is not in the quorum.
+        written_blocks.append((block_id, list(nodes)))
 
         acknowledgements = []
         failures = []
@@ -175,10 +322,11 @@ class DataServicer(data_pb2_grpc.DataServiceServicer):
             except grpc.RpcError as error:
                 failures.append(f"{node_id}: {error.code().name}: {error.details()}")
 
-        if len(acknowledgements) < 2:
-            raise RuntimeError(
+        if len(acknowledgements) < WRITE_QUORUM:
+            raise UploadRejected(
+                grpc.StatusCode.FAILED_PRECONDITION,
                 f"Replication quorum not reached for block {block_id} "
-                f"(acks={acknowledgements}, failures={failures})"
+                f"(acks={acknowledgements}, failures={failures})",
             )
 
         return metadata_pb2.CommittedBlock(
